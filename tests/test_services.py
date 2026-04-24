@@ -22,6 +22,13 @@ def test_estimate_minutes_is_positive():
     assert estimate_minutes(20, 80, 22) > 0
 
 
+def test_estimate_minutes_changes_with_battery_size():
+    small_pack = estimate_minutes(20, 80, 22, assumed_battery_kwh=40)
+    large_pack = estimate_minutes(20, 80, 22, assumed_battery_kwh=80)
+
+    assert large_pack > small_pack
+
+
 def test_check_in_accepts_inside_geofence():
     db = make_session()
     seed_demo_data(db)

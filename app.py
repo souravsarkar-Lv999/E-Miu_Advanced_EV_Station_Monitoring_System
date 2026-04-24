@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import csv
 import io
+import socket
 from datetime import datetime
+from urllib.parse import urlencode
 
+import qrcode
 import streamlit as st
 import streamlit.components.v1 as components
 from sqlalchemy import select
@@ -25,11 +28,13 @@ from ev_monitoring.services import (
     create_booth,
     create_station,
     dashboard_summary,
+    estimate_minutes,
     finish_session,
     get_driver_queue_entry,
     join_queue,
     reset_booth,
 )
+from ev_monitoring.vehicles import VEHICLE_MODELS
 
 
 st.set_page_config(
@@ -109,6 +114,88 @@ def format_datetime(value: datetime | None) -> str:
     return value.strftime("%Y-%m-%d %H:%M")
 
 
+def get_local_ip() -> str:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            return sock.getsockname()[0]
+    except OSError:
+        try:
+            return socket.gethostbyname(socket.gethostname())
+        except OSError:
+            return "localhost"
+
+
+def build_booth_url(booth_code: str) -> str:
+    host = get_local_ip()
+    query = urlencode(
+        {
+            "page": "driver",
+            "booth": booth_code,
+            "mobile": "1",
+        }
+    )
+    return f"http://{host}:8501/?{query}"
+
+
+def make_qr_image(url: str):
+    qr = qrcode.QRCode(box_size=6, border=2)
+    qr.add_data(url)
+    qr.make(fit=True)
+    return qr.make_image(fill_color="black", back_color="white")
+
+
+def query_value(name: str, default: str = "") -> str:
+    value = st.query_params.get(name, default)
+    if isinstance(value, list):
+        return value[0] if value else default
+    return value
+
+
+def query_float(name: str, fallback: float) -> float:
+    value = query_value(name)
+    if not value:
+        return fallback
+    try:
+        return float(value)
+    except ValueError:
+        return fallback
+
+
+def render_mobile_location_capture() -> None:
+    components.html(
+        """
+        <script>
+          const search = new URLSearchParams(window.parent.location.search);
+          const hasCoords = search.get("lat") && search.get("lon");
+          const status = document.getElementById("location-status");
+          if (!hasCoords && navigator.geolocation) {
+            status.textContent = "Requesting your phone location...";
+            navigator.geolocation.getCurrentPosition(
+              (position) => {
+                search.set("lat", position.coords.latitude.toFixed(6));
+                search.set("lon", position.coords.longitude.toFixed(6));
+                window.parent.location.search = search.toString();
+              },
+              (error) => {
+                status.textContent = "Location access failed: " + error.message;
+              },
+              { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+            );
+          } else if (hasCoords) {
+            status.textContent = "Phone location captured.";
+          } else {
+            status.textContent = "Your browser does not support location.";
+          }
+        </script>
+        <div id="location-status" style="font-family:Arial,sans-serif;padding:10px;border:1px solid #d1d5db;border-radius:8px;background:#f8fafc">
+          Preparing phone location...
+        </div>
+        """,
+        height=80,
+    )
+
+
 def home_page() -> None:
     st.title("EV Charging Station Monitoring")
     st.write(
@@ -140,10 +227,18 @@ def home_page() -> None:
                         f"Lat {booth.latitude:.6f}, Lon {booth.longitude:.6f}, "
                         f"Radius {booth.radius_meters:.0f} m"
                     )
+                    with st.expander("Phone QR"):
+                        booth_url = build_booth_url(booth.code)
+                        st.image(make_qr_image(booth_url), caption=f"Scan for {booth.name}", width=180)
+                        st.code(booth_url, language=None)
 
 
 def admin_dashboard_page() -> None:
     st.title("Admin Dashboard")
+    st.info(
+        f"For phone testing on the same hotspot/network, open or scan links that use this laptop IP: "
+        f"`{get_local_ip()}:8501`"
+    )
 
     with get_session() as db:
         stations = db.scalars(select(Station).order_by(Station.name)).all()
@@ -235,6 +330,16 @@ def admin_dashboard_page() -> None:
                 st.success(message) if ok else st.warning(message)
                 st.rerun()
 
+        st.subheader("Booth QR Links")
+        qr_cols = st.columns(3)
+        for index, booth in enumerate(booths):
+            booth_url = build_booth_url(booth.code)
+            with qr_cols[index % 3]:
+                st.markdown(f"**{booth.name}**")
+                st.image(make_qr_image(booth_url), width=180)
+                st.caption("Scan on iPhone or Android")
+                st.code(booth_url, language=None)
+
 
 def driver_check_in_page() -> None:
     st.title("Driver Check-In")
@@ -246,9 +351,20 @@ def driver_check_in_page() -> None:
             return
 
         demo_booth = booths[0]
+        booth_code_from_query = query_value("booth").upper()
+        mobile_mode = query_value("mobile") == "1"
+        selected_from_query = next(
+            (booth for booth in booths if booth.code == booth_code_from_query),
+            demo_booth,
+        )
+
+        if mobile_mode:
+            st.info("QR scan detected. This page is ready for phone check-in.")
+            render_mobile_location_capture()
+
         driver_name = st.text_input("Driver name", value="Demo Driver")
         queue_entry = get_driver_queue_entry(db, driver_name)
-        default_booth = demo_booth
+        default_booth = selected_from_query
         if queue_entry is not None:
             st.info(f"{driver_name.strip() or 'Driver'}, you are currently still in the queue.")
 
@@ -265,17 +381,35 @@ def driver_check_in_page() -> None:
             )
             driver_latitude = st.number_input(
                 "Your latitude",
-                value=float(selected_booth.latitude),
+                value=query_float("lat", float(selected_booth.latitude)),
                 format="%.6f",
             )
             driver_longitude = st.number_input(
                 "Your longitude",
-                value=float(selected_booth.longitude),
+                value=query_float("lon", float(selected_booth.longitude)),
                 format="%.6f",
             )
+            car_model = st.selectbox("Car model", list(VEHICLE_MODELS.keys()))
+            vehicle = VEHICLE_MODELS[car_model]
             start_battery = st.slider("Current battery %", 1, 95, 25)
             target_battery = st.slider("Target battery %", start_battery + 1, 100, 80)
-            current_power = st.slider("Simulated charging power (kW)", 3.0, 150.0, 22.0)
+            station_power = st.slider("Station charging power (kW)", 3.0, 150.0, 30.0)
+            effective_power = min(station_power, vehicle["max_power_kw"])
+            estimated_minutes = estimate_minutes(
+                start_battery,
+                target_battery,
+                effective_power,
+                assumed_battery_kwh=vehicle["battery_kwh"],
+            )
+
+            info1, info2, info3 = st.columns(3)
+            info1.metric("Battery Size", f"{vehicle['battery_kwh']} kWh")
+            info2.metric("Car Max Intake", f"{vehicle['max_power_kw']} kW")
+            info3.metric("Estimated Time", f"{estimated_minutes} min")
+            st.caption(
+                f"Effective charging power used for estimation: {effective_power:.1f} kW. "
+                f"This is based on the selected car model and station power."
+            )
 
             submitted = st.form_submit_button("Check in and start charging")
             if submitted:
@@ -287,7 +421,7 @@ def driver_check_in_page() -> None:
                     driver_longitude,
                     start_battery,
                     target_battery,
-                    current_power,
+                    effective_power,
                 )
                 if ok:
                     st.success(message)
@@ -457,16 +591,22 @@ def about_page() -> None:
 def main() -> None:
     bootstrap()
     st.sidebar.title("Navigation")
+    page_options = [
+        "Home",
+        "Admin Dashboard",
+        "Driver Check-In",
+        "Queue",
+        "Reports",
+        "About Project",
+    ]
+    default_page = query_value("page")
+    default_index = 0
+    if default_page == "driver" or query_value("booth"):
+        default_index = page_options.index("Driver Check-In")
     page = st.sidebar.radio(
         "Go to",
-        [
-            "Home",
-            "Admin Dashboard",
-            "Driver Check-In",
-            "Queue",
-            "Reports",
-            "About Project",
-        ],
+        page_options,
+        index=default_index,
     )
 
     if st.sidebar.button("Refresh data"):
