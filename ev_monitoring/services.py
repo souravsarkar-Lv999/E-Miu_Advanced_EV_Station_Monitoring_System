@@ -95,10 +95,9 @@ def attempt_check_in(
     booth = db.scalar(select(Booth).where(Booth.code == booth_code.strip().upper()))
     if booth is None:
         return False, "No booth found for that code.", None
-    driver = get_or_create_driver(db, driver_name)
-    booking = get_driver_booking_for_booth(db, driver.id, booth.id)
-    if booth.status not in {BoothStatus.FREE, BoothStatus.FINISHED} and booking is None:
+    if booth.status not in {BoothStatus.FREE, BoothStatus.FINISHED}:
         return False, f"{booth.name} is currently {booth.status.value}.", None
+    driver = get_or_create_driver(db, driver_name)
 
     inside, distance = is_inside_geofence(
         booth.latitude,
@@ -131,18 +130,10 @@ def attempt_check_in(
         current_power_kw=current_power_kw,
         estimated_finish_at=datetime.utcnow() + timedelta(minutes=estimated_minutes),
     )
-    if booking is not None:
-        booking.status = QueueStatus.CANCELLED
     booth.status = BoothStatus.CHARGING
     db.add(session)
     db.commit()
     db.refresh(session)
-    if booking is not None:
-        return (
-            True,
-            f"Check-in accepted for your booked booth. Distance from booth: {distance:.1f} m.",
-            session,
-        )
     return True, f"Check-in accepted. Distance from booth: {distance:.1f} m.", session
 
 
@@ -177,10 +168,9 @@ def reset_booth(db: Session, booth_id: int) -> tuple[Booth | None, str]:
     booth.status = BoothStatus.FREE
     db.commit()
     db.refresh(booth)
-    entry = auto_assign_next_waiting_driver(db, booth.station_id, preferred_booth=booth)
+    entry = pop_next_waiting_driver(db, booth.station_id)
     if entry is not None:
-        db.refresh(booth)
-        return booth, f"{booth.name} is now booked for {entry.driver.name}."
+        return booth, f"{booth.name} is now free. {entry.driver.name} was removed from the queue."
     return booth, f"{booth.name} is now free."
 
 
@@ -190,7 +180,7 @@ def join_queue(db: Session, station_id: int, driver_name: str) -> QueueEntry:
         select(QueueEntry).where(
             QueueEntry.driver_id == driver.id,
             QueueEntry.station_id == station_id,
-            QueueEntry.status.in_([QueueStatus.WAITING, QueueStatus.ASSIGNED]),
+            QueueEntry.status == QueueStatus.WAITING,
         )
     )
     if existing:
@@ -199,7 +189,6 @@ def join_queue(db: Session, station_id: int, driver_name: str) -> QueueEntry:
     db.add(entry)
     db.commit()
     db.refresh(entry)
-    entry = assign_queue_entry_to_free_booth(db, entry) or entry
     return entry
 
 
@@ -221,51 +210,13 @@ def assign_next_waiting_driver(db: Session, booth_id: int) -> tuple[bool, str]:
     if entry is None:
         return False, "No waiting drivers for this station."
 
-    assign_entry_to_booth(db, entry, booth)
-    return True, f"{entry.driver.name} has been assigned to {booth.name}."
-
-
-def assign_entry_to_booth(db: Session, entry: QueueEntry, booth: Booth) -> QueueEntry:
-    entry.status = QueueStatus.ASSIGNED
-    entry.assigned_booth_id = booth.id
-    booth.status = BoothStatus.OCCUPIED
+    entry.status = QueueStatus.CANCELLED
     db.commit()
     db.refresh(entry)
-    return entry
+    return True, f"{entry.driver.name} was removed from the queue for {booth.name}."
 
 
-def assign_queue_entry_to_free_booth(db: Session, entry: QueueEntry) -> QueueEntry | None:
-    free_booth = db.scalar(
-        select(Booth)
-        .where(
-            Booth.station_id == entry.station_id,
-            Booth.status.in_([BoothStatus.FREE, BoothStatus.FINISHED]),
-        )
-        .order_by(Booth.name.asc())
-    )
-    if free_booth is None:
-        return None
-    return assign_entry_to_booth(db, entry, free_booth)
-
-
-def auto_assign_next_waiting_driver(
-    db: Session,
-    station_id: int,
-    preferred_booth: Booth | None = None,
-) -> QueueEntry | None:
-    booth = preferred_booth
-    if booth is None:
-        booth = db.scalar(
-            select(Booth)
-            .where(
-                Booth.station_id == station_id,
-                Booth.status == BoothStatus.FREE,
-            )
-            .order_by(Booth.name.asc())
-        )
-    if booth is None or booth.status != BoothStatus.FREE:
-        return None
-
+def pop_next_waiting_driver(db: Session, station_id: int) -> QueueEntry | None:
     entry = db.scalar(
         select(QueueEntry)
         .where(
@@ -276,7 +227,11 @@ def auto_assign_next_waiting_driver(
     )
     if entry is None:
         return None
-    return assign_entry_to_booth(db, entry, booth)
+    entry.status = QueueStatus.CANCELLED
+    entry.assigned_booth_id = None
+    db.commit()
+    db.refresh(entry)
+    return entry
 
 
 def get_driver_queue_entry(
@@ -291,37 +246,13 @@ def get_driver_queue_entry(
         .join(User)
         .where(
             User.username == username,
-            QueueEntry.status.in_([QueueStatus.WAITING, QueueStatus.ASSIGNED]),
+            QueueEntry.status == QueueStatus.WAITING,
         )
         .order_by(QueueEntry.requested_at.asc())
     )
     if station_id is not None:
         query = query.where(QueueEntry.station_id == station_id)
     return db.scalar(query)
-
-
-def get_driver_booking_for_booth(
-    db: Session,
-    driver_id: int,
-    booth_id: int,
-) -> QueueEntry | None:
-    return db.scalar(
-        select(QueueEntry).where(
-            QueueEntry.driver_id == driver_id,
-            QueueEntry.assigned_booth_id == booth_id,
-            QueueEntry.status == QueueStatus.ASSIGNED,
-        )
-    )
-
-
-def get_booth_booking_map(db: Session) -> dict[int, QueueEntry]:
-    entries = db.scalars(
-        select(QueueEntry).where(
-            QueueEntry.status == QueueStatus.ASSIGNED,
-            QueueEntry.assigned_booth_id.is_not(None),
-        )
-    ).all()
-    return {entry.assigned_booth_id: entry for entry in entries if entry.assigned_booth_id is not None}
 
 
 def dashboard_summary(db: Session) -> dict[str, int]:

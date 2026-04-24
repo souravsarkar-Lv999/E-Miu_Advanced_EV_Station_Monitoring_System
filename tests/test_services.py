@@ -77,33 +77,28 @@ def test_reset_booth_sets_it_free_after_session():
     assert "now free" in message
 
 
-def test_join_queue_books_driver_if_booth_is_already_free():
+def test_join_queue_keeps_driver_waiting():
     db = make_session()
     seed_demo_data(db)
 
     entry = join_queue(db, 1, "Queue Driver")
 
-    assert entry.status == QueueStatus.ASSIGNED
-    assert entry.assigned_booth_id is not None
+    assert entry.status == QueueStatus.WAITING
+    assert entry.assigned_booth_id is None
 
 
-def test_booked_driver_can_check_in_and_leave_queue():
+def test_reset_booth_removes_first_waiting_driver_from_queue():
     db = make_session()
     seed_demo_data(db)
-    entry = join_queue(db, 1, "Queue Driver")
-
-    ok, message, session = attempt_check_in(
-        db,
-        booth_code="BOOTH-A",
-        driver_name="Queue Driver",
-        driver_latitude=28.6139,
-        driver_longitude=77.2090,
-        start_battery_percent=25,
-        target_battery_percent=80,
-        current_power_kw=22,
+    join_queue(db, 1, "Queue Driver")
+    ok, _, session = attempt_check_in(
+        db, "BOOTH-A", "Asha Driver", 28.6139, 77.2090, 25, 80, 22
     )
 
-    assert entry.status == QueueStatus.CANCELLED
     assert ok is True
-    assert "booked booth" in message
-    assert session is not None
+    booth, message = reset_booth(db, session.booth_id)
+    remaining = join_queue(db, 1, "Queue Driver")
+
+    assert booth.status == BoothStatus.FREE
+    assert "removed from the queue" in message
+    assert remaining.status == QueueStatus.WAITING
