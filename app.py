@@ -22,10 +22,13 @@ from ev_monitoring.seed import seed_demo_data
 from ev_monitoring.services import (
     assign_next_waiting_driver,
     attempt_check_in,
+    auto_assign_next_waiting_driver,
     create_booth,
     create_station,
     dashboard_summary,
     finish_session,
+    get_booth_booking_map,
+    get_driver_queue_entry,
     join_queue,
     reset_booth,
 )
@@ -126,6 +129,7 @@ def home_page() -> None:
 
         st.subheader("Booth Status")
         booths = db.scalars(select(Booth).order_by(Booth.name)).all()
+        booking_map = get_booth_booking_map(db)
         if not booths:
             st.info("No booths yet. Create one from Admin Dashboard.")
         else:
@@ -135,6 +139,8 @@ def home_page() -> None:
                     st.markdown(f"### {booth.name}")
                     st.markdown(status_badge(booth.status.value), unsafe_allow_html=True)
                     st.write(f"Code: `{booth.code}`")
+                    if booth.id in booking_map:
+                        st.write(f"Booked for: **{booking_map[booth.id].driver.name}**")
                     st.caption(
                         f"Lat {booth.latitude:.6f}, Lon {booth.longitude:.6f}, "
                         f"Radius {booth.radius_meters:.0f} m"
@@ -204,6 +210,7 @@ def admin_dashboard_page() -> None:
 
         st.subheader("Live Booth Table")
         booths = db.scalars(select(Booth).order_by(Booth.name)).all()
+        booking_map = get_booth_booking_map(db)
         st.dataframe(
             [
                 {
@@ -211,6 +218,7 @@ def admin_dashboard_page() -> None:
                     "Code": booth.code,
                     "Station": booth.station.name,
                     "Status": booth.status.value,
+                    "Booked for": booking_map[booth.id].driver.name if booth.id in booking_map else "-",
                     "Latitude": booth.latitude,
                     "Longitude": booth.longitude,
                     "Radius (m)": booth.radius_meters,
@@ -224,9 +232,16 @@ def admin_dashboard_page() -> None:
         st.subheader("Booth Controls")
         for booth in booths:
             col1, col2, col3 = st.columns([2, 1, 1])
-            col1.markdown(f"**{booth.name}** {status_badge(booth.status.value)}", unsafe_allow_html=True)
+            booking_text = ""
+            if booth.id in booking_map:
+                booking_text = f" booked for {booking_map[booth.id].driver.name}"
+            col1.markdown(
+                f"**{booth.name}** {status_badge(booth.status.value)}{booking_text}",
+                unsafe_allow_html=True,
+            )
             if col2.button("Mark free", key=f"free_{booth.id}"):
-                reset_booth(db, booth.id)
+                _, message = reset_booth(db, booth.id)
+                st.success(message)
                 st.rerun()
             if col3.button("Assign queue", key=f"assign_{booth.id}", disabled=booth.status != BoothStatus.FREE):
                 ok, message = assign_next_waiting_driver(db, booth.id)
@@ -244,13 +259,29 @@ def driver_check_in_page() -> None:
             return
 
         demo_booth = booths[0]
-        render_geolocation_helper(demo_booth.latitude, demo_booth.longitude)
+        driver_name = st.text_input("Driver name", value="Demo Driver")
+        booking = get_driver_queue_entry(db, driver_name)
+        if booking is not None and booking.status == QueueStatus.ASSIGNED and booking.assigned_booth_id:
+            booked_booth = db.get(Booth, booking.assigned_booth_id)
+            st.success(
+                f"{driver_name.strip() or 'Driver'}, {booked_booth.name} is booked for you. "
+                "Check in there to start charging."
+            )
+            default_booth = booked_booth
+        else:
+            default_booth = demo_booth
+            if booking is not None and booking.status == QueueStatus.WAITING:
+                st.info(f"{driver_name.strip() or 'Driver'}, you are still waiting in the queue.")
+
+        render_geolocation_helper(default_booth.latitude, default_booth.longitude)
 
         booth_options = {f"{booth.name} ({booth.code})": booth for booth in booths}
+        default_index = list(booth_options.values()).index(default_booth)
         with st.form("driver_check_in"):
-            driver_name = st.text_input("Driver name", value="Demo Driver")
-            booth_label = st.selectbox("Charging booth", list(booth_options.keys()))
+            booth_label = st.selectbox("Charging booth", list(booth_options.keys()), index=default_index)
             selected_booth = booth_options[booth_label]
+            if booking is not None and booking.status == QueueStatus.ASSIGNED and selected_booth.id != booking.assigned_booth_id:
+                st.caption("Tip: pick your booked booth to complete check-in and leave the queue automatically.")
             st.caption(
                 "For a real phone test, paste the GPS values from the helper. "
                 "For local demo testing, keep the booth's coordinates."
@@ -319,30 +350,62 @@ def queue_page() -> None:
             st.warning("Create a station first.")
             return
 
+        st.write(
+            "Join the queue with your driver name. If a booth is already free, the system "
+            "will book it for the first waiting driver automatically."
+        )
+
+        lookup_name = st.text_input("Check my queue or booking status", value="Queued Driver")
+        driver_status = get_driver_queue_entry(db, lookup_name)
+        if driver_status is not None:
+            if driver_status.status == QueueStatus.ASSIGNED and driver_status.assigned_booth_id:
+                booked_booth = db.get(Booth, driver_status.assigned_booth_id)
+                st.success(
+                    f"{lookup_name.strip() or 'Driver'}: {booked_booth.name} is booked for you. "
+                    "Go to Driver Check-In to start charging."
+                )
+            else:
+                st.info(f"{lookup_name.strip() or 'Driver'}: you are still waiting in line.")
+
         with st.form("join_queue"):
             station_map = {station.name: station for station in stations}
             station_name = st.selectbox("Station", list(station_map.keys()))
             driver_name = st.text_input("Driver name", value="Queued Driver")
             if st.form_submit_button("Join queue"):
                 entry = join_queue(db, station_map[station_name].id, driver_name)
-                st.success(f"{entry.driver.name} is in the queue for {entry.station.name}.")
+                if entry.status == QueueStatus.ASSIGNED and entry.assigned_booth_id:
+                    booth = db.get(Booth, entry.assigned_booth_id)
+                    st.success(f"{entry.driver.name} has been booked into {booth.name}.")
+                else:
+                    st.success(f"{entry.driver.name} is in the queue for {entry.station.name}.")
                 st.rerun()
+
+        for station in stations:
+            auto_assign_next_waiting_driver(db, station.id)
 
         entries = db.scalars(select(QueueEntry).order_by(QueueEntry.requested_at.asc())).all()
         st.subheader("Current Queue")
         if not entries:
             st.info("Queue is empty.")
             return
+        waiting_entries = [
+            entry
+            for entry in entries
+            if entry.status == QueueStatus.WAITING
+        ]
+        waiting_positions = {entry.id: index + 1 for index, entry in enumerate(waiting_entries)}
         st.dataframe(
             [
                 {
                     "Driver": entry.driver.name,
                     "Station": entry.station.name,
-                    "Status": entry.status.value,
+                    "Status": "booked" if entry.status == QueueStatus.ASSIGNED else entry.status.value,
+                    "Queue Position": waiting_positions.get(entry.id, "-"),
                     "Requested": format_datetime(entry.requested_at),
-                    "Assigned booth id": entry.assigned_booth_id or "-",
+                    "Assigned Booth": db.get(Booth, entry.assigned_booth_id).name if entry.assigned_booth_id else "-",
                 }
                 for entry in entries
+                if entry.status in [QueueStatus.WAITING, QueueStatus.ASSIGNED]
             ],
             use_container_width=True,
             hide_index=True,
