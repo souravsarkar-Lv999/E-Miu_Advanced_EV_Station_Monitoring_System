@@ -237,6 +237,7 @@ def query_optional_int(name: str) -> int | None:
 def init_demo_state() -> None:
     st.session_state.setdefault("payment_records", {})
     st.session_state.setdefault("pending_payment_session_id", None)
+    st.session_state.setdefault("finish_after_payment_session_id", None)
 
 
 @st.cache_data(show_spinner=False)
@@ -265,7 +266,7 @@ def render_miu_sidebar_card() -> None:
     st.sidebar.markdown("---")
     miu_avatar = load_miu_avatar()
     if miu_avatar is not None:
-        st.sidebar.image(miu_avatar, width=96)
+        st.sidebar.image(miu_avatar, width=68)
     st.sidebar.markdown("**Talk to Miu**")
     st.sidebar.caption("Mascot assistant for EV guidance. AI chat coming soon.")
 
@@ -438,6 +439,10 @@ def render_payment_panel(session: ChargingSession) -> None:
                 "amount": quote["total_amount"],
                 "paid_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
             }
+            if st.session_state.get("finish_after_payment_session_id") == session.id:
+                with get_session() as db:
+                    finish_session(db, session.id)
+                st.session_state["finish_after_payment_session_id"] = None
             st.session_state["pending_payment_session_id"] = None
             st.success(f"{label} for Session #{session.id}.")
             st.rerun()
@@ -479,7 +484,7 @@ def render_clipboard_paste_helper() -> None:
 
 
 @st.fragment(run_every="5s")
-def render_home_live_panel() -> None:
+def render_home_live_panel(selected_station_id: int | None) -> None:
     with get_session() as db:
         summary = dashboard_summary(db)
         col1, col2, col3, col4 = st.columns(4)
@@ -488,25 +493,48 @@ def render_home_live_panel() -> None:
         col3.metric("Waiting Drivers", summary["waiting_drivers"])
         col4.metric("Completed Sessions", summary["completed_sessions"])
 
-        st.subheader("Booth Status")
-        booths = db.scalars(select(Booth).order_by(Booth.name)).all()
+        stations = db.scalars(
+            select(Station)
+            .options(selectinload(Station.booths))
+            .order_by(Station.name)
+        ).all()
+        if not stations:
+            st.info("No stations yet. Create one from Admin Dashboard.")
+            return
+
+        station_options = {station.name: station for station in stations}
+        station_names = list(station_options.keys())
+        initial_index = 0
+        if selected_station_id is not None:
+            initial_index = next(
+                (index for index, station in enumerate(stations) if station.id == selected_station_id),
+                0,
+            )
+        selected_station_name = st.selectbox(
+            "Station overview",
+            station_names,
+            index=initial_index,
+            key="home_station_selector",
+        )
+        selected_station = station_options[selected_station_name]
+
+        st.subheader(f"{selected_station.name} Booth Status")
+        st.caption(selected_station.address)
+        booths = sorted(selected_station.booths, key=lambda booth: booth.name)
         if not booths:
-            st.info("No booths yet. Create one from Admin Dashboard.")
-        else:
-            cols = st.columns(min(len(booths), 3))
-            for index, booth in enumerate(booths):
-                with cols[index % len(cols)]:
-                    st.markdown(f"### {booth.name}")
-                    st.markdown(status_badge(booth.status.value), unsafe_allow_html=True)
-                    st.write(f"Code: `{booth.code}`")
-                    st.caption(
-                        f"Lat {booth.latitude:.6f}, Lon {booth.longitude:.6f}, "
-                        f"Radius {booth.radius_meters:.0f} m"
-                    )
-                    with st.expander("Phone QR"):
-                        booth_url = build_booth_url(booth.code)
-                        st.image(make_qr_image(booth_url), caption=f"Scan for {booth.name}", width=180)
-                        st.code(booth_url, language=None)
+            st.info("No booths yet for this station.")
+            return
+
+        cols = st.columns(min(len(booths), 3))
+        for index, booth in enumerate(booths):
+            with cols[index % len(cols)]:
+                st.markdown(f"### {booth.name}")
+                st.markdown(status_badge(booth.status.value), unsafe_allow_html=True)
+                st.caption(f"Code: {booth.code} | Radius {booth.radius_meters:.0f} m")
+                with st.expander("QR + link", expanded=False):
+                    booth_url = build_booth_url(booth.code)
+                    st.image(make_qr_image(booth_url), width=120)
+                    st.code(booth_url, language=None)
 
 
 def home_page() -> None:
@@ -522,14 +550,19 @@ def home_page() -> None:
         unsafe_allow_html=True,
     )
     render_live_update_hint()
-    render_home_live_panel()
+    render_home_live_panel(query_optional_int("station_id"))
 
 
 @st.fragment(run_every="5s")
 def render_admin_live_panel() -> None:
     with get_session() as db:
+        stations = db.scalars(
+            select(Station)
+            .options(selectinload(Station.booths))
+            .order_by(Station.name)
+        ).all()
         st.subheader("Live Booth Table")
-        booths = db.scalars(select(Booth).order_by(Booth.name)).all()
+        booths = [booth for station in stations for booth in sorted(station.booths, key=lambda booth: booth.name)]
         st.dataframe(
             [
                 {
@@ -564,15 +597,17 @@ def render_admin_live_panel() -> None:
                 st.success(message) if ok else st.warning(message)
                 st.rerun()
 
-        st.subheader("Booth QR Links")
-        qr_cols = st.columns(3)
-        for index, booth in enumerate(booths):
-            booth_url = build_booth_url(booth.code)
-            with qr_cols[index % 3]:
-                st.markdown(f"**{booth.name}**")
-                st.image(make_qr_image(booth_url), width=180)
-                st.caption("Scan on iPhone or Android")
-                st.code(booth_url, language=None)
+        st.subheader("Station Booth QR Links")
+        for station in stations:
+            with st.expander(f"{station.name} ({len(station.booths)} booths)", expanded=False):
+                station_booths = sorted(station.booths, key=lambda booth: booth.name)
+                qr_cols = st.columns(min(max(len(station_booths), 1), 3))
+                for index, booth in enumerate(station_booths):
+                    booth_url = build_booth_url(booth.code)
+                    with qr_cols[index % len(qr_cols)]:
+                        st.markdown(f"**{booth.name}**")
+                        st.image(make_qr_image(booth_url), width=110)
+                        st.caption(booth.code)
 
 
 def admin_dashboard_page() -> None:
@@ -660,11 +695,23 @@ def render_driver_live_panel(pending_payment_session_id: int | None) -> None:
                 f"Session #{session.id}: {session.driver.name} at {session.booth.name} "
                 f"({session.current_power_kw:.1f} kW, finish {format_datetime(session.estimated_finish_at)} UTC)"
             )
-            if col2.button("Finish session", key=f"finish_{session.id}"):
-                finished = finish_session(db, session.id)
-                if finished is not None:
-                    st.session_state["pending_payment_session_id"] = finished.id
+            if col2.button("Finish + pay", key=f"finish_{session.id}"):
+                st.session_state["pending_payment_session_id"] = session.id
+                st.session_state["finish_after_payment_session_id"] = session.id
                 st.rerun()
+
+        if pending_payment_session_id is not None:
+            pending_session = db.get(ChargingSession, pending_payment_session_id)
+            if (
+                pending_session is not None
+                and pending_session.id not in st.session_state["payment_records"]
+                and st.session_state.get("finish_after_payment_session_id") == pending_session.id
+            ):
+                st.subheader("Payment Required Before Session Finish")
+                st.write(
+                    f"Complete payment for Session #{pending_session.id} to mark charging as finished."
+                )
+                render_payment_panel(pending_session)
 
         unpaid_finished_sessions = db.scalars(
             select(ChargingSession)
@@ -1097,9 +1144,9 @@ def talk_to_miu_page() -> None:
 def about_page() -> None:
     st.title("About")
     st.write(
-        "This project copies the research paper's geofencing attendance pattern "
-        "and applies it to EV charging. Instead of students proving they are in "
-        "a lecture hall, drivers prove they are near a charger booth."
+        "E-Miu is a compact EV charging operations demo built to monitor stations, "
+        "track live booth availability, manage driver queues, support phone-based session "
+        "check-in, and preview the future assistant-led charging experience."
     )
     st.markdown(
         """
@@ -1120,6 +1167,10 @@ def about_page() -> None:
         - SMS or WhatsApp queue notifications
         - Cloud deployment with PostgreSQL
         """
+    )
+    st.write(
+        "The `experiment` and `experiment-1` branches are used to explore product ideas like "
+        "live station monitoring, map-based charger discovery, compact admin workflows, and the Miu mascot experience."
     )
     st.markdown(f"GitHub repository: [{REPO_URL}]({REPO_URL})")
 
