@@ -5,11 +5,13 @@ import io
 import json
 import socket
 from datetime import datetime
+from pathlib import Path
 from urllib.parse import urlencode
 
 import qrcode
 import streamlit as st
 import streamlit.components.v1 as components
+from PIL import Image, ImageDraw, ImageOps
 from sqlalchemy.orm import selectinload
 from sqlalchemy import select
 
@@ -46,6 +48,10 @@ st.set_page_config(
     page_icon="EV",
     layout="wide",
 )
+
+
+MIU_IMAGE_PATH = Path("C:/Users/Sourav/Downloads/miu.png")
+REPO_URL = "https://github.com/sourav-cosmos/EV-monitoring"
 
 
 def bootstrap() -> None:
@@ -231,6 +237,41 @@ def query_optional_int(name: str) -> int | None:
 def init_demo_state() -> None:
     st.session_state.setdefault("payment_records", {})
     st.session_state.setdefault("pending_payment_session_id", None)
+
+
+@st.cache_data(show_spinner=False)
+def load_miu_avatar() -> bytes | None:
+    if not MIU_IMAGE_PATH.exists():
+        return None
+
+    with Image.open(MIU_IMAGE_PATH) as source:
+        size = min(source.size)
+        left = (source.width - size) // 2
+        top = (source.height - size) // 2
+        avatar = source.crop((left, top, left + size, top + size)).convert("RGBA")
+        avatar = ImageOps.fit(avatar, (128, 128), centering=(0.5, 0.5))
+
+    mask = Image.new("L", (128, 128), 0)
+    drawer = ImageDraw.Draw(mask)
+    drawer.ellipse((0, 0, 127, 127), fill=255)
+    avatar.putalpha(mask)
+
+    buffer = io.BytesIO()
+    avatar.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def render_miu_sidebar_card() -> None:
+    st.sidebar.markdown("---")
+    miu_avatar = load_miu_avatar()
+    if miu_avatar is not None:
+        st.sidebar.image(miu_avatar, width=96)
+    st.sidebar.markdown("**Talk to Miu**")
+    st.sidebar.caption("Mascot assistant for EV guidance. AI chat coming soon.")
+
+
+def render_live_update_hint(label: str = "Live updates every 5 seconds on monitoring panels.") -> None:
+    st.caption(label)
 
 
 def build_station_map(
@@ -437,14 +478,8 @@ def render_clipboard_paste_helper() -> None:
     )
 
 
-def home_page() -> None:
-    st.title("EV Charging Station Monitoring")
-    st.write(
-        "A working MVP that adapts geofencing attendance logic into EV booth "
-        "monitoring. Admins define charger geofences. Drivers check in from "
-        "inside the radius. The dashboard tracks booth and queue status."
-    )
-
+@st.fragment(run_every="5s")
+def render_home_live_panel() -> None:
     with get_session() as db:
         summary = dashboard_summary(db)
         col1, col2, col3, col4 = st.columns(4)
@@ -472,6 +507,72 @@ def home_page() -> None:
                         booth_url = build_booth_url(booth.code)
                         st.image(make_qr_image(booth_url), caption=f"Scan for {booth.name}", width=180)
                         st.code(booth_url, language=None)
+
+
+def home_page() -> None:
+    st.markdown(
+        """
+        <div style="padding:0.25rem 0 1rem 0">
+          <h1 style="margin:0;font-size:2.3rem;color:#0f172a;">E-Miu- Advanced EV monitoring System</h1>
+          <p style="margin:0.45rem 0 0 0;font-size:1.05rem;color:#475569;">
+            Live charger visibility, smart queue tracking, and phone-first session monitoring in one sleek control room.
+          </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    render_live_update_hint()
+    render_home_live_panel()
+
+
+@st.fragment(run_every="5s")
+def render_admin_live_panel() -> None:
+    with get_session() as db:
+        st.subheader("Live Booth Table")
+        booths = db.scalars(select(Booth).order_by(Booth.name)).all()
+        st.dataframe(
+            [
+                {
+                    "Booth": booth.name,
+                    "Code": booth.code,
+                    "Station": booth.station.name,
+                    "Status": booth.status.value,
+                    "Latitude": booth.latitude,
+                    "Longitude": booth.longitude,
+                    "Radius (m)": booth.radius_meters,
+                }
+                for booth in booths
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        st.subheader("Booth Controls")
+        for booth in booths:
+            col1, col2, col3 = st.columns([2, 1, 1])
+            col1.markdown(f"**{booth.name}** {status_badge(booth.status.value)}", unsafe_allow_html=True)
+            if col2.button("Mark free", key=f"free_{booth.id}"):
+                _, message = reset_booth(db, booth.id)
+                st.success(message)
+                st.rerun()
+            if col3.button(
+                "Assign queue",
+                key=f"assign_{booth.id}",
+                disabled=booth.status != BoothStatus.FREE,
+            ):
+                ok, message = assign_next_waiting_driver(db, booth.id)
+                st.success(message) if ok else st.warning(message)
+                st.rerun()
+
+        st.subheader("Booth QR Links")
+        qr_cols = st.columns(3)
+        for index, booth in enumerate(booths):
+            booth_url = build_booth_url(booth.code)
+            with qr_cols[index % 3]:
+                st.markdown(f"**{booth.name}**")
+                st.image(make_qr_image(booth_url), width=180)
+                st.caption("Scan on iPhone or Android")
+                st.code(booth_url, language=None)
 
 
 def admin_dashboard_page() -> None:
@@ -538,48 +639,55 @@ def admin_dashboard_page() -> None:
                         st.rerun()
                     except Exception as exc:
                         st.error(f"Could not create booth: {exc}")
+    render_live_update_hint("Live booth data refreshes every 5 seconds. Open forms stay in place.")
+    render_admin_live_panel()
 
-        st.subheader("Live Booth Table")
-        booths = db.scalars(select(Booth).order_by(Booth.name)).all()
-        st.dataframe(
-            [
-                {
-                    "Booth": booth.name,
-                    "Code": booth.code,
-                    "Station": booth.station.name,
-                    "Status": booth.status.value,
-                    "Latitude": booth.latitude,
-                    "Longitude": booth.longitude,
-                    "Radius (m)": booth.radius_meters,
-                }
-                for booth in booths
-            ],
-            use_container_width=True,
-            hide_index=True,
-        )
 
-        st.subheader("Booth Controls")
-        for booth in booths:
-            col1, col2, col3 = st.columns([2, 1, 1])
-            col1.markdown(f"**{booth.name}** {status_badge(booth.status.value)}", unsafe_allow_html=True)
-            if col2.button("Mark free", key=f"free_{booth.id}"):
-                _, message = reset_booth(db, booth.id)
-                st.success(message)
-                st.rerun()
-            if col3.button("Assign queue", key=f"assign_{booth.id}", disabled=booth.status != BoothStatus.FREE):
-                ok, message = assign_next_waiting_driver(db, booth.id)
-                st.success(message) if ok else st.warning(message)
+@st.fragment(run_every="5s")
+def render_driver_live_panel(pending_payment_session_id: int | None) -> None:
+    with get_session() as db:
+        st.subheader("Active Sessions")
+        sessions = db.scalars(
+            select(ChargingSession)
+            .where(ChargingSession.status.in_([SessionStatus.OCCUPIED, SessionStatus.CHARGING]))
+            .order_by(ChargingSession.started_at.desc())
+        ).all()
+        if not sessions:
+            st.info("No active charging sessions.")
+        for session in sessions:
+            col1, col2 = st.columns([3, 1])
+            col1.write(
+                f"Session #{session.id}: {session.driver.name} at {session.booth.name} "
+                f"({session.current_power_kw:.1f} kW, finish {format_datetime(session.estimated_finish_at)} UTC)"
+            )
+            if col2.button("Finish session", key=f"finish_{session.id}"):
+                finished = finish_session(db, session.id)
+                if finished is not None:
+                    st.session_state["pending_payment_session_id"] = finished.id
                 st.rerun()
 
-        st.subheader("Booth QR Links")
-        qr_cols = st.columns(3)
-        for index, booth in enumerate(booths):
-            booth_url = build_booth_url(booth.code)
-            with qr_cols[index % 3]:
-                st.markdown(f"**{booth.name}**")
-                st.image(make_qr_image(booth_url), width=180)
-                st.caption("Scan on iPhone or Android")
-                st.code(booth_url, language=None)
+        unpaid_finished_sessions = db.scalars(
+            select(ChargingSession)
+            .where(ChargingSession.status == SessionStatus.FINISHED)
+            .order_by(ChargingSession.finished_at.desc())
+        ).all()
+        pending_sessions = [
+            session
+            for session in unpaid_finished_sessions
+            if session.id not in st.session_state["payment_records"]
+        ]
+        if pending_sessions:
+            st.subheader("Finished Sessions Waiting for Demo Payment")
+            for session in pending_sessions[:3]:
+                with st.expander(
+                    f"Session #{session.id} | {session.driver.name}",
+                    expanded=session.id == pending_payment_session_id,
+                ):
+                    st.write(
+                        f"{session.booth.station.name} | {session.booth.name} | "
+                        f"Finished at {format_datetime(session.finished_at)} UTC"
+                    )
+                    render_payment_panel(session)
 
 
 def driver_check_in_page() -> None:
@@ -713,45 +821,36 @@ def driver_check_in_page() -> None:
             else:
                 st.error(message)
 
-        st.subheader("Active Sessions")
-        sessions = db.scalars(
-            select(ChargingSession)
-            .where(ChargingSession.status.in_([SessionStatus.OCCUPIED, SessionStatus.CHARGING]))
-            .order_by(ChargingSession.started_at.desc())
-        ).all()
-        if not sessions:
-            st.info("No active charging sessions.")
-        for session in sessions:
-            col1, col2 = st.columns([3, 1])
-            col1.write(
-                f"Session #{session.id}: {session.driver.name} at {session.booth.name} "
-                f"({session.current_power_kw:.1f} kW, finish {format_datetime(session.estimated_finish_at)} UTC)"
-            )
-            if col2.button("Finish session", key=f"finish_{session.id}"):
-                finished = finish_session(db, session.id)
-                if finished is not None:
-                    st.session_state["pending_payment_session_id"] = finished.id
-                st.rerun()
+    render_live_update_hint("Session updates refresh every 5 seconds, even when another phone starts charging.")
+    render_driver_live_panel(pending_payment_session_id)
 
-        unpaid_finished_sessions = db.scalars(
-            select(ChargingSession)
-            .where(ChargingSession.status == SessionStatus.FINISHED)
-            .order_by(ChargingSession.finished_at.desc())
-        ).all()
-        pending_sessions = [
-            session
-            for session in unpaid_finished_sessions
-            if session.id not in st.session_state["payment_records"]
-        ]
-        if pending_sessions:
-            st.subheader("Finished Sessions Waiting for Demo Payment")
-            for session in pending_sessions[:3]:
-                with st.expander(f"Session #{session.id} • {session.driver.name}", expanded=session.id == pending_payment_session_id):
-                    st.write(
-                        f"{session.booth.station.name} • {session.booth.name} • "
-                        f"Finished at {format_datetime(session.finished_at)} UTC"
-                    )
-                    render_payment_panel(session)
+
+@st.fragment(run_every="5s")
+def render_queue_live_panel() -> None:
+    with get_session() as db:
+        entries = db.scalars(select(QueueEntry).order_by(QueueEntry.requested_at.asc())).all()
+        st.subheader("Current Queue")
+        if not entries:
+            st.info("Queue is empty.")
+            return
+
+        waiting_entries = [entry for entry in entries if entry.status == QueueStatus.WAITING]
+        waiting_positions = {entry.id: index + 1 for index, entry in enumerate(waiting_entries)}
+        st.dataframe(
+            [
+                {
+                    "Driver": entry.driver.name,
+                    "Station": entry.station.name,
+                    "Status": entry.status.value,
+                    "Queue Position": waiting_positions.get(entry.id, "-"),
+                    "Requested": format_datetime(entry.requested_at),
+                }
+                for entry in entries
+                if entry.status == QueueStatus.WAITING
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
 
 
 def queue_page() -> None:
@@ -781,56 +880,16 @@ def queue_page() -> None:
                 entry = join_queue(db, station_map[station_name].id, driver_name)
                 st.success(f"{entry.driver.name} is in the queue for {entry.station.name}.")
                 st.rerun()
-
-        entries = db.scalars(select(QueueEntry).order_by(QueueEntry.requested_at.asc())).all()
-        st.subheader("Current Queue")
-        if not entries:
-            st.info("Queue is empty.")
-            return
-        waiting_entries = [
-            entry
-            for entry in entries
-            if entry.status == QueueStatus.WAITING
-        ]
-        waiting_positions = {entry.id: index + 1 for index, entry in enumerate(waiting_entries)}
-        st.dataframe(
-            [
-                {
-                    "Driver": entry.driver.name,
-                    "Station": entry.station.name,
-                    "Status": entry.status.value,
-                    "Queue Position": waiting_positions.get(entry.id, "-"),
-                    "Requested": format_datetime(entry.requested_at),
-                }
-                for entry in entries
-                if entry.status == QueueStatus.WAITING
-            ],
-            use_container_width=True,
-            hide_index=True,
-        )
+    render_live_update_hint("Queue status refreshes every 5 seconds while your form entries stay intact.")
+    render_queue_live_panel()
 
 
-def map_page() -> None:
-    st.title("Maps")
-    st.write(
-        "Use the live map to find the nearest charging station, then click a marker to inspect "
-        "free booths, active charging spots, and the current queue."
-    )
-
-    user_latitude = query_optional_float("lat")
-    user_longitude = query_optional_float("lon")
-
-    if user_latitude is None or user_longitude is None:
-        user_latitude = 28.6139
-        user_longitude = 77.2090
-        st.info("Using demo location near central Delhi. Use the GPS helper below for nearest stations.")
-    else:
-        st.success(
-            f"Using your map location: {user_latitude:.6f}, {user_longitude:.6f}"
-        )
-
-    render_geolocation_helper(user_latitude, user_longitude, auto_apply=True)
-
+@st.fragment(run_every="5s")
+def render_map_live_panel(
+    user_latitude: float,
+    user_longitude: float,
+    selected_station_id: int | None,
+) -> None:
     with get_session() as db:
         stations = db.scalars(
             select(Station)
@@ -858,7 +917,7 @@ def map_page() -> None:
             )
         )
 
-        selected_station_id = query_optional_int("station_id") or int(station_cards[0]["station_id"])
+        selected_station_id = selected_station_id or int(station_cards[0]["station_id"])
         build_station_map(
             station_cards,
             selected_station_id=selected_station_id,
@@ -873,6 +932,8 @@ def map_page() -> None:
         }
         if not station_options:
             station_options = {station["station_name"]: station for station in station_cards}
+
+        option_values = list(station_options.values())
         selected_label = st.selectbox(
             "Nearest stations",
             list(station_options.keys()),
@@ -881,7 +942,7 @@ def map_page() -> None:
                 next(
                     (
                         idx
-                        for idx, station in enumerate(station_options.values())
+                        for idx, station in enumerate(option_values)
                         if station["station_id"] == selected_station_id
                     ),
                     0,
@@ -899,7 +960,7 @@ def map_page() -> None:
         overview3.metric("Queue", int(selected_station_snapshot["queue_count"]))
         overview4.metric("Total Booths", int(selected_station_snapshot["total_booths"]))
         st.caption(
-            f"{selected_station_snapshot['station_name']} • {selected_station_snapshot['address']}"
+            f"{selected_station_snapshot['station_name']} | {selected_station_snapshot['address']}"
         )
 
         booth_rows = [
@@ -936,6 +997,30 @@ def map_page() -> None:
             )
         else:
             st.info("No drivers are waiting at this station right now.")
+
+
+def map_page() -> None:
+    st.title("Maps")
+    st.write(
+        "Use the live map to find the nearest charging station, then click a marker to inspect "
+        "free booths, active charging spots, and the current queue."
+    )
+
+    user_latitude = query_optional_float("lat")
+    user_longitude = query_optional_float("lon")
+
+    if user_latitude is None or user_longitude is None:
+        user_latitude = 28.6139
+        user_longitude = 77.2090
+        st.info("Using demo location near central Delhi. Use the GPS helper below for nearest stations.")
+    else:
+        st.success(
+            f"Using your map location: {user_latitude:.6f}, {user_longitude:.6f}"
+        )
+
+    render_geolocation_helper(user_latitude, user_longitude, auto_apply=True)
+    render_live_update_hint("Map, station status, and queue counts refresh every 5 seconds.")
+    render_map_live_panel(user_latitude, user_longitude, query_optional_int("station_id"))
 
 
 def reports_page() -> None:
@@ -990,6 +1075,25 @@ def reports_page() -> None:
             )
 
 
+def talk_to_miu_page() -> None:
+    st.title("Talk to Miu")
+    miu_avatar = load_miu_avatar()
+    if miu_avatar is not None:
+        left, right = st.columns([1, 3])
+        with left:
+            st.image(miu_avatar, width=170)
+        with right:
+            st.markdown("### Miu is the mascot of E-Miu")
+            st.write(
+                "This space is reserved for the future AI assistant experience. "
+                "For now, Miu is here as the face of the platform and a placeholder for the upcoming smart helper."
+            )
+    else:
+        st.info("Miu's avatar is temporarily unavailable, but the assistant page placeholder is ready.")
+
+    st.caption("Planned next step: AI help for charger discovery, queue guidance, and payment support.")
+
+
 def about_page() -> None:
     st.title("About")
     st.write(
@@ -1017,6 +1121,7 @@ def about_page() -> None:
         - Cloud deployment with PostgreSQL
         """
     )
+    st.markdown(f"GitHub repository: [{REPO_URL}]({REPO_URL})")
 
 
 def main() -> None:
@@ -1030,6 +1135,7 @@ def main() -> None:
         "Driver Check-In",
         "Queue",
         "Reports",
+        "Talk to Miu",
         "About Project",
     ]
     if not mobile_mode:
@@ -1045,6 +1151,7 @@ def main() -> None:
         page_options,
         index=default_index,
     )
+    render_miu_sidebar_card()
 
     if st.sidebar.button("Refresh data"):
         st.rerun()
@@ -1061,6 +1168,8 @@ def main() -> None:
         queue_page()
     elif page == "Reports":
         reports_page()
+    elif page == "Talk to Miu":
+        talk_to_miu_page()
     else:
         about_page()
 
