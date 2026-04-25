@@ -1,100 +1,72 @@
-# EV Charging Station Monitoring
+# E-Miu Advanced EV Station Monitoring System
 
-A working Streamlit MVP that adapts a geofencing attendance system into an EV charging station monitoring system.
+E-Miu is a Streamlit-based EV charging operations demo that turns geofencing ideas into a compact station monitoring system for admins and drivers.
 
-The original research paper logic is:
+## Main Branch Features
 
-- Lecturer creates a geofence around a lecture hall.
-- Student checks in from inside the geofence.
-- Backend records attendance.
-- Dashboard shows attendance status.
+- Station and booth setup from the admin dashboard
+- Geofence-based driver check-in at booth level
+- GPS-assisted browser location helper
+- Live booth states for `free`, `occupied`, `charging`, and `finished`
+- Queue handling for busy stations
+- Charging session simulation with battery and power inputs
+- Reports with CSV export
+- Demo seed data for instant testing
 
-This project changes the domain:
+## Upcoming In `experiment`
 
-- Station admin creates geofences around EV charging booths.
-- EV driver checks in from inside the booth radius.
-- Backend records a charging session.
-- Dashboard shows booth status, active charging, queue, and reports.
+- Faster QR-first phone testing workflow
+- Better local-network launch flow for laptop + phone demos
+- More compact admin QR operations
+- Expanded mobile check-in refinements
 
-## Features
+## Upcoming In `experiment-1`
 
-- Admin dashboard for station and booth setup
-- Booth code support, similar to QR/code workflow
-- Browser GPS helper using JavaScript Geolocation API
-- Haversine geofence validation in Python
-- SQLite database with SQLAlchemy models
-- Simulated charging power, battery target, and finish time
-- Booth states: `free`, `occupied`, `charging`, `finished`
-- Queue management when booths are busy
-- Reports with CSV download
-- Demo data that works immediately
+- E-Miu branded interface polish
+- Nearby station map experience
+- Demo payment-before-finish session flow
+- Live-refresh monitoring panels
+- Miu mascot assistant preview
 
 ## Tech Stack
 
 - Python
 - Streamlit
-- JavaScript browser geolocation
 - SQLite
 - SQLAlchemy
+- JavaScript geolocation helpers
 - Pytest
 
-## How To Run In VS Code
+## Run Locally
 
-1. Open VS Code.
-2. Open this project folder:
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+streamlit run app.py
+```
 
-   ```text
-   ev-charging-station-monitoring
-   ```
+Open `http://localhost:8501`.
 
-3. Open the VS Code terminal.
-4. Create a virtual environment:
+If the branch includes `run_experiment.ps1`, you can also use:
 
-   ```powershell
-   python -m venv .venv
-   ```
-
-5. Activate it:
-
-   ```powershell
-   .\.venv\Scripts\Activate.ps1
-   ```
-
-6. Install dependencies:
-
-   ```powershell
-   pip install -r requirements.txt
-   ```
-
-7. Start the app:
-
-   ```powershell
-   streamlit run app.py
-   ```
-
-8. Open the local URL shown in the terminal, usually:
-
-   ```text
-   http://localhost:8501
-   ```
+```powershell
+powershell -ExecutionPolicy Bypass -File .\run_experiment.ps1
+```
 
 ## Demo Flow
 
-1. Open **Home** to see the default demo booths.
-2. Open **Driver Check-In**.
-3. Select `Booth A`.
-4. Keep the default latitude and longitude for a successful demo check-in.
-5. Click **Check in and start charging**.
-6. Open **Admin Dashboard** or **Home** to see the booth become `charging`.
-7. Finish the session from **Driver Check-In**.
-8. Mark the booth free from **Admin Dashboard**.
-
-To test geofence rejection, change the driver latitude/longitude far away from the booth and submit again.
+1. Open `Home` to review booth or station status.
+2. Open `Driver Check-In`.
+3. Select a booth and keep the default nearby coordinates for a successful demo.
+4. Start a charging session.
+5. Watch the status update from the dashboard views.
+6. Complete the session flow and review reports.
 
 ## Project Structure
 
 ```text
-ev-charging-station-monitoring/
+EV-monitoring/
   app.py
   requirements.txt
   README.md
@@ -112,48 +84,14 @@ ev-charging-station-monitoring/
 
 ## Tests
 
-Run:
-
 ```powershell
 pytest
 ```
 
-The tests cover:
+## Repository
 
-- same-location geofence success
-- far-location geofence rejection
-- Haversine distance sanity check
-- check-in accepting a driver inside the booth radius
-- check-in rejecting a driver outside the booth radius
-- booth reset after a charging session
-
-## GitHub Upload With GitHub Desktop
-
-Since this project is meant to be open source, the easiest beginner path is GitHub Desktop:
-
-1. Open GitHub Desktop.
-2. Choose **File > Add local repository**.
-3. Select the `ev-charging-station-monitoring` folder.
-4. If GitHub Desktop asks to create a repository, allow it.
-5. Write a commit message like:
-
-   ```text
-   Initial EV charging monitoring MVP
-   ```
-
-6. Click **Commit to main**.
-7. Click **Publish repository** or push to your existing `ev monitoring` repository.
-8. Keep it public if you want it open source.
-
-## Future Scope
-
-- Connect to real charger hardware through OCPP or vendor APIs.
-- Generate real QR codes for each booth.
-- Add login with password hashing.
-- Add PostgreSQL for cloud deployment.
-- Add SMS, email, or WhatsApp notifications for queue updates.
-- Deploy on Streamlit Community Cloud, Render, or Azure App Service.
+[https://github.com/souravsarkar-Lv999/EV-monitoring](https://github.com/souravsarkar-Lv999/EV-monitoring)
 
 ## License
 
-MIT License. You can use, modify, and publish this project as open source.
+MIT License.
