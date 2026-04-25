@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import socket
 from datetime import datetime
 from urllib.parse import urlencode
@@ -9,6 +10,7 @@ from urllib.parse import urlencode
 import qrcode
 import streamlit as st
 import streamlit.components.v1 as components
+from sqlalchemy.orm import selectinload
 from sqlalchemy import select
 
 from ev_monitoring.database import get_session, init_db
@@ -29,10 +31,12 @@ from ev_monitoring.services import (
     create_station,
     dashboard_summary,
     estimate_minutes,
+    estimate_payment_amount,
     finish_session,
     get_driver_queue_entry,
     join_queue,
     reset_booth,
+    station_live_status,
 )
 from ev_monitoring.vehicles import VEHICLE_MODELS
 
@@ -212,6 +216,190 @@ def query_optional_float(name: str) -> float | None:
         return float(value)
     except ValueError:
         return None
+
+
+def query_optional_int(name: str) -> int | None:
+    value = query_value(name)
+    if not value:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def init_demo_state() -> None:
+    st.session_state.setdefault("payment_records", {})
+    st.session_state.setdefault("pending_payment_session_id", None)
+
+
+def build_station_map(
+    stations: list[dict[str, float | int | str | None]],
+    *,
+    selected_station_id: int | None,
+    user_latitude: float | None,
+    user_longitude: float | None,
+) -> None:
+    if not stations:
+        st.info("No stations are available on the map yet.")
+        return
+
+    station_payload = json.dumps(stations)
+    default_station = next(
+        (station for station in stations if station["station_id"] == selected_station_id),
+        stations[0],
+    )
+    center_latitude = user_latitude if user_latitude is not None else default_station["latitude"]
+    center_longitude = (
+        user_longitude if user_longitude is not None else default_station["longitude"]
+    )
+
+    components.html(
+        f"""
+        <link
+          rel="stylesheet"
+          href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+          crossorigin=""
+        />
+        <div style="border:1px solid #dbe4ef;border-radius:16px;overflow:hidden">
+          <div id="station-map" style="height:460px;width:100%"></div>
+        </div>
+        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+          crossorigin=""></script>
+        <script>
+          const stations = {station_payload};
+          const selectedStationId = {json.dumps(selected_station_id)};
+          const userLatitude = {json.dumps(user_latitude)};
+          const userLongitude = {json.dumps(user_longitude)};
+          const map = L.map("station-map", {{ zoomControl: true }}).setView(
+            [{float(center_latitude)}, {float(center_longitude)}],
+            13
+          );
+
+          L.tileLayer("https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png", {{
+            maxZoom: 19,
+            attribution: "&copy; OpenStreetMap contributors"
+          }}).addTo(map);
+
+          const selectedIcon = L.divIcon({{
+            className: "",
+            html: "<div style='width:18px;height:18px;border-radius:999px;background:#0f766e;border:3px solid white;box-shadow:0 6px 14px rgba(15,118,110,0.35)'></div>",
+            iconSize: [18, 18],
+            iconAnchor: [9, 9]
+          }});
+          const defaultIcon = L.divIcon({{
+            className: "",
+            html: "<div style='width:16px;height:16px;border-radius:999px;background:#1d4ed8;border:3px solid white;box-shadow:0 6px 14px rgba(29,78,216,0.30)'></div>",
+            iconSize: [16, 16],
+            iconAnchor: [8, 8]
+          }});
+
+          function updateSelection(stationId) {{
+            const parentWindow = window.parent;
+            const url = new URL(parentWindow.location.href);
+            url.searchParams.set("page", "map");
+            url.searchParams.set("station_id", stationId);
+            if (userLatitude !== null && userLongitude !== null) {{
+              url.searchParams.set("lat", userLatitude);
+              url.searchParams.set("lon", userLongitude);
+            }}
+            parentWindow.location.href = url.toString();
+          }}
+
+          stations.forEach((station) => {{
+            const marker = L.marker(
+              [station.latitude, station.longitude],
+              {{ icon: station.station_id === selectedStationId ? selectedIcon : defaultIcon }}
+            ).addTo(map);
+
+            marker.bindPopup(`
+              <div style="min-width:220px;font-family:Arial,sans-serif">
+                <strong>${{station.station_name}}</strong><br />
+                <span>${{station.address}}</span><br /><br />
+                <span>Free: ${{station.free_count}}</span><br />
+                <span>Charging: ${{station.charging_count}}</span><br />
+                <span>Queue: ${{station.queue_count}}</span><br />
+                <button
+                  onclick="window.__openStation && window.__openStation(${{station.station_id}})"
+                  style="margin-top:10px;border:0;border-radius:8px;background:#0f172a;color:white;padding:8px 10px;cursor:pointer"
+                >
+                  View station details
+                </button>
+              </div>
+            `);
+            marker.on("click", () => updateSelection(station.station_id));
+          }});
+
+          window.__openStation = updateSelection;
+
+          if (userLatitude !== null && userLongitude !== null) {{
+            const you = L.circleMarker([userLatitude, userLongitude], {{
+              radius: 7,
+              color: "#f97316",
+              fillColor: "#fb923c",
+              fillOpacity: 0.9,
+              weight: 2
+            }}).addTo(map);
+            you.bindTooltip("Your location", {{ permanent: false }});
+          }}
+        </script>
+        """,
+        height=500,
+    )
+
+
+def render_payment_panel(session: ChargingSession) -> None:
+    payment_records = st.session_state["payment_records"]
+    quote = estimate_payment_amount(
+        session.start_battery_percent,
+        session.target_battery_percent,
+        session.current_power_kw,
+    )
+    existing_payment = payment_records.get(session.id)
+
+    st.subheader(f"Demo Payment for Session #{session.id}")
+    metric1, metric2, metric3, metric4 = st.columns(4)
+    metric1.metric("Units Used", f"{quote['units_kwh']:.2f} kWh")
+    metric2.metric("Charging Power", f"{session.current_power_kw:.1f} kW")
+    metric3.metric("Energy Cost", f"Rs {quote['energy_cost']:.2f}")
+    metric4.metric("Total", f"Rs {quote['total_amount']:.2f}")
+    st.caption(
+        "Demo tariff: Rs 14.50 per kWh plus a small power-access fee based on charger load."
+    )
+
+    if existing_payment:
+        st.success(
+            f"{existing_payment['label']} recorded via {existing_payment['method']} at "
+            f"{existing_payment['paid_at']}."
+        )
+        return
+
+    with st.form(f"payment_form_{session.id}"):
+        method = st.radio(
+            "Payment method",
+            ["UPI", "Credit Card", "Debit Card", "Net Banking", "Wallet", "Already Paid"],
+            horizontal=True,
+        )
+        reference = st.text_input(
+            "Reference",
+            value=f"TXN-{session.id:04d}",
+            help="Demo field to show how a transaction reference would appear.",
+        )
+        submitted = st.form_submit_button("Complete demo payment", type="primary")
+        if submitted:
+            label = "Payment complete" if method != "Already Paid" else "Already paid"
+            payment_records[session.id] = {
+                "method": method,
+                "reference": reference.strip() or f"TXN-{session.id:04d}",
+                "label": label,
+                "amount": quote["total_amount"],
+                "paid_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+            }
+            st.session_state["pending_payment_session_id"] = None
+            st.success(f"{label} for Session #{session.id}.")
+            st.rerun()
 
 
 def render_clipboard_paste_helper() -> None:
@@ -500,6 +688,8 @@ def driver_check_in_page() -> None:
             f"This updates live when you change car model or battery percentages."
         )
 
+        pending_payment_session_id = st.session_state.get("pending_payment_session_id")
+
         submit_disabled = mobile_mode and mobile_latitude is None and not show_manual_location
         submitted = st.button("Check in and start charging", type="primary", disabled=submit_disabled)
         if submitted:
@@ -538,8 +728,30 @@ def driver_check_in_page() -> None:
                 f"({session.current_power_kw:.1f} kW, finish {format_datetime(session.estimated_finish_at)} UTC)"
             )
             if col2.button("Finish session", key=f"finish_{session.id}"):
-                finish_session(db, session.id)
+                finished = finish_session(db, session.id)
+                if finished is not None:
+                    st.session_state["pending_payment_session_id"] = finished.id
                 st.rerun()
+
+        unpaid_finished_sessions = db.scalars(
+            select(ChargingSession)
+            .where(ChargingSession.status == SessionStatus.FINISHED)
+            .order_by(ChargingSession.finished_at.desc())
+        ).all()
+        pending_sessions = [
+            session
+            for session in unpaid_finished_sessions
+            if session.id not in st.session_state["payment_records"]
+        ]
+        if pending_sessions:
+            st.subheader("Finished Sessions Waiting for Demo Payment")
+            for session in pending_sessions[:3]:
+                with st.expander(f"Session #{session.id} • {session.driver.name}", expanded=session.id == pending_payment_session_id):
+                    st.write(
+                        f"{session.booth.station.name} • {session.booth.name} • "
+                        f"Finished at {format_datetime(session.finished_at)} UTC"
+                    )
+                    render_payment_panel(session)
 
 
 def queue_page() -> None:
@@ -598,6 +810,134 @@ def queue_page() -> None:
         )
 
 
+def map_page() -> None:
+    st.title("Maps")
+    st.write(
+        "Use the live map to find the nearest charging station, then click a marker to inspect "
+        "free booths, active charging spots, and the current queue."
+    )
+
+    user_latitude = query_optional_float("lat")
+    user_longitude = query_optional_float("lon")
+
+    if user_latitude is None or user_longitude is None:
+        user_latitude = 28.6139
+        user_longitude = 77.2090
+        st.info("Using demo location near central Delhi. Use the GPS helper below for nearest stations.")
+    else:
+        st.success(
+            f"Using your map location: {user_latitude:.6f}, {user_longitude:.6f}"
+        )
+
+    render_geolocation_helper(user_latitude, user_longitude, auto_apply=True)
+
+    with get_session() as db:
+        stations = db.scalars(
+            select(Station)
+            .options(selectinload(Station.booths))
+            .order_by(Station.name)
+        ).all()
+        if not stations:
+            st.warning("No stations are configured yet.")
+            return
+
+        station_cards = [
+            station_live_status(
+                db,
+                station,
+                user_latitude=user_latitude,
+                user_longitude=user_longitude,
+            )
+            for station in stations
+        ]
+        station_cards.sort(
+            key=lambda station: (
+                station["distance_meters"]
+                if station["distance_meters"] is not None
+                else float("inf")
+            )
+        )
+
+        selected_station_id = query_optional_int("station_id") or int(station_cards[0]["station_id"])
+        build_station_map(
+            station_cards,
+            selected_station_id=selected_station_id,
+            user_latitude=user_latitude,
+            user_longitude=user_longitude,
+        )
+
+        station_options = {
+            f"{station['station_name']} ({station['distance_meters'] / 1000:.2f} km)": station
+            for station in station_cards
+            if station["distance_meters"] is not None
+        }
+        if not station_options:
+            station_options = {station["station_name"]: station for station in station_cards}
+        selected_label = st.selectbox(
+            "Nearest stations",
+            list(station_options.keys()),
+            index=max(
+                0,
+                next(
+                    (
+                        idx
+                        for idx, station in enumerate(station_options.values())
+                        if station["station_id"] == selected_station_id
+                    ),
+                    0,
+                ),
+            ),
+        )
+        selected_station_snapshot = station_options[selected_label]
+        selected_station = next(
+            station for station in stations if station.id == selected_station_snapshot["station_id"]
+        )
+
+        overview1, overview2, overview3, overview4 = st.columns(4)
+        overview1.metric("Free", int(selected_station_snapshot["free_count"]))
+        overview2.metric("Charging", int(selected_station_snapshot["charging_count"]))
+        overview3.metric("Queue", int(selected_station_snapshot["queue_count"]))
+        overview4.metric("Total Booths", int(selected_station_snapshot["total_booths"]))
+        st.caption(
+            f"{selected_station_snapshot['station_name']} • {selected_station_snapshot['address']}"
+        )
+
+        booth_rows = [
+            {
+                "Booth": booth.name,
+                "Code": booth.code,
+                "Status": booth.status.value,
+                "Radius (m)": booth.radius_meters,
+            }
+            for booth in sorted(selected_station.booths, key=lambda booth: booth.name)
+        ]
+        st.dataframe(booth_rows, use_container_width=True, hide_index=True)
+
+        waiting_entries = db.scalars(
+            select(QueueEntry)
+            .where(
+                QueueEntry.station_id == selected_station.id,
+                QueueEntry.status == QueueStatus.WAITING,
+            )
+            .order_by(QueueEntry.requested_at.asc())
+        ).all()
+        if waiting_entries:
+            st.write("Drivers currently in line")
+            st.dataframe(
+                [
+                    {
+                        "Driver": entry.driver.name,
+                        "Requested": format_datetime(entry.requested_at),
+                    }
+                    for entry in waiting_entries
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.info("No drivers are waiting at this station right now.")
+
+
 def reports_page() -> None:
     st.title("Reports")
 
@@ -617,6 +957,7 @@ def reports_page() -> None:
                 "Started": format_datetime(session.started_at),
                 "Estimated Finish": format_datetime(session.estimated_finish_at),
                 "Finished": format_datetime(session.finished_at),
+                "Payment": st.session_state["payment_records"].get(session.id, {}).get("label", "Pending"),
             }
             for session in sessions
         ]
@@ -680,10 +1021,12 @@ def about_page() -> None:
 
 def main() -> None:
     bootstrap()
+    init_demo_state()
     mobile_mode = query_value("mobile") == "1"
     st.sidebar.title("Navigation")
     page_options = [
         "Home",
+        "Maps",
         "Driver Check-In",
         "Queue",
         "Reports",
@@ -693,7 +1036,9 @@ def main() -> None:
         page_options.insert(1, "Admin Dashboard")
     default_page = query_value("page")
     default_index = 0
-    if default_page == "driver" or query_value("booth"):
+    if default_page == "map":
+        default_index = page_options.index("Maps")
+    elif default_page == "driver" or query_value("booth"):
         default_index = page_options.index("Driver Check-In")
     page = st.sidebar.radio(
         "Go to",
@@ -706,6 +1051,8 @@ def main() -> None:
 
     if page == "Home":
         home_page()
+    elif page == "Maps":
+        map_page()
     elif page == "Admin Dashboard":
         admin_dashboard_page()
     elif page == "Driver Check-In":

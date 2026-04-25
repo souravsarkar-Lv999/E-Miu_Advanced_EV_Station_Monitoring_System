@@ -6,8 +6,10 @@ from ev_monitoring.seed import seed_demo_data
 from ev_monitoring.services import (
     attempt_check_in,
     estimate_minutes,
+    estimate_payment_amount,
     join_queue,
     reset_booth,
+    station_live_status,
 )
 
 
@@ -109,3 +111,30 @@ def test_reset_booth_removes_first_waiting_driver_from_queue():
     assert booth.status == BoothStatus.FREE
     assert "removed from the queue" in message
     assert remaining.status == QueueStatus.WAITING
+
+
+def test_station_live_status_counts_booths_and_queue():
+    db = make_session()
+    seed_demo_data(db)
+    join_queue(db, 1, "Queue Driver")
+    ok, _, session = attempt_check_in(
+        db, "BOOTH-A", "Asha Driver", 28.6139, 77.2090, 25, 80, 22
+    )
+
+    assert ok is True
+
+    snapshot = station_live_status(db, session.booth.station, user_latitude=28.6139, user_longitude=77.2090)
+
+    assert snapshot["charging_count"] == 1
+    assert snapshot["free_count"] >= 1
+    assert snapshot["queue_count"] == 1
+    assert snapshot["distance_meters"] == 0
+
+
+def test_estimate_payment_amount_uses_units_and_power():
+    quote = estimate_payment_amount(20, 80, 30)
+
+    assert quote["units_kwh"] == 36.0
+    assert quote["energy_cost"] == 522.0
+    assert quote["power_fee"] == 10.5
+    assert quote["total_amount"] == 532.5

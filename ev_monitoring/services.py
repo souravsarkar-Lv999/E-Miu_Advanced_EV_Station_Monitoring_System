@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ev_monitoring.geofence import is_inside_geofence
+from ev_monitoring.geofence import haversine_distance_meters, is_inside_geofence
 from ev_monitoring.models import (
     Booth,
     BoothStatus,
@@ -275,4 +275,82 @@ def dashboard_summary(db: Session) -> dict[str, int]:
         "waiting_drivers": waiting,
         "completed_sessions": completed,
         "active_sessions": active,
+    }
+
+
+def station_live_status(
+    db: Session,
+    station: Station,
+    *,
+    user_latitude: float | None = None,
+    user_longitude: float | None = None,
+) -> dict[str, float | int | str]:
+    booths = list(station.booths)
+    free_count = sum(1 for booth in booths if booth.status == BoothStatus.FREE)
+    charging_count = sum(1 for booth in booths if booth.status == BoothStatus.CHARGING)
+    occupied_count = sum(1 for booth in booths if booth.status == BoothStatus.OCCUPIED)
+    finished_count = sum(1 for booth in booths if booth.status == BoothStatus.FINISHED)
+    queue_count = db.scalar(
+        select(func.count(QueueEntry.id)).where(
+            QueueEntry.station_id == station.id,
+            QueueEntry.status == QueueStatus.WAITING,
+        )
+    ) or 0
+
+    distance_meters = None
+    if user_latitude is not None and user_longitude is not None:
+        distance_meters = haversine_distance_meters(
+            user_latitude,
+            user_longitude,
+            station.latitude,
+            station.longitude,
+        )
+
+    return {
+        "station_id": station.id,
+        "station_name": station.name,
+        "address": station.address,
+        "latitude": station.latitude,
+        "longitude": station.longitude,
+        "total_booths": len(booths),
+        "free_count": free_count,
+        "charging_count": charging_count,
+        "occupied_count": occupied_count,
+        "finished_count": finished_count,
+        "queue_count": int(queue_count),
+        "distance_meters": distance_meters,
+    }
+
+
+def estimate_energy_kwh(
+    start_battery_percent: int,
+    target_battery_percent: int,
+    battery_kwh: float = 60.0,
+) -> float:
+    percent_to_charge = max(target_battery_percent - start_battery_percent, 1)
+    return round(battery_kwh * (percent_to_charge / 100), 2)
+
+
+def estimate_payment_amount(
+    start_battery_percent: int,
+    target_battery_percent: int,
+    current_power_kw: float,
+    *,
+    battery_kwh: float = 60.0,
+    energy_rate_per_kwh: float = 14.5,
+    power_fee_per_kw: float = 0.35,
+) -> dict[str, float]:
+    units_kwh = estimate_energy_kwh(
+        start_battery_percent,
+        target_battery_percent,
+        battery_kwh=battery_kwh,
+    )
+    energy_cost = round(units_kwh * energy_rate_per_kwh, 2)
+    power_fee = round(max(current_power_kw, 1) * power_fee_per_kw, 2)
+    total_amount = round(energy_cost + power_fee, 2)
+    return {
+        "units_kwh": units_kwh,
+        "energy_cost": energy_cost,
+        "power_fee": power_fee,
+        "total_amount": total_amount,
     }
