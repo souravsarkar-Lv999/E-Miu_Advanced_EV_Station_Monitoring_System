@@ -27,7 +27,7 @@ if (-not (Test-Path $venvPython)) {
 $port = Get-FreePort -StartPort $preferredPort
 
 Write-Host ""
-Write-Host "Starting EV Monitoring on port $port" -ForegroundColor Cyan
+Write-Host "Starting E-Miu Advanced EV Station Monitoring System on port $port" -ForegroundColor Cyan
 Write-Host "Laptop URL: http://localhost:$port" -ForegroundColor Green
 Write-Host "Phone URL:  http://$(hostname):$port" -ForegroundColor Green
 Write-Host ""
