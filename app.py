@@ -44,14 +44,14 @@ from ev_monitoring.vehicles import VEHICLE_MODELS
 
 
 st.set_page_config(
-    page_title="EV Charging Station Monitoring",
+    page_title="E-Miu Advanced EV Station Monitoring System",
     page_icon="EV",
     layout="wide",
 )
 
 
 MIU_IMAGE_PATH = Path("C:/Users/Sourav/Downloads/miu.png")
-REPO_URL = "https://github.com/sourav-cosmos/EV-monitoring"
+REPO_URL = "https://github.com/souravsarkar-Lv999/EV-monitoring"
 
 
 def bootstrap() -> None:
