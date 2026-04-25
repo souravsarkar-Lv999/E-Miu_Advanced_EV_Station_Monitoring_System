@@ -51,7 +51,7 @@ st.set_page_config(
 
 
 MIU_IMAGE_PATH = Path("C:/Users/Sourav/Downloads/miu.png")
-REPO_URL = "https://github.com/souravsarkar-Lv999/EV-monitoring"
+REPO_URL = "https://github.com/souravsarkar-Lv999/E-Miu_Advanced_EV_Station_Monitoring_System"
 
 
 def bootstrap() -> None:

@@ -1,4 +1,4 @@
-# E-Miu Advanced EV Station Monitoring System
+# E-Miu_Advanced_EV_Station_Monitoring_System
 
 E-Miu is a Streamlit-based EV charging operations demo that turns geofencing ideas into a compact station monitoring system for admins and drivers.
 
@@ -66,7 +66,7 @@ powershell -ExecutionPolicy Bypass -File .\run_experiment.ps1
 ## Project Structure
 
 ```text
-EV-monitoring/
+E-Miu_Advanced_EV_Station_Monitoring_System/
   app.py
   requirements.txt
   README.md
@@ -90,7 +90,7 @@ pytest
 
 ## Repository
 
-[https://github.com/souravsarkar-Lv999/EV-monitoring](https://github.com/souravsarkar-Lv999/EV-monitoring)
+[https://github.com/souravsarkar-Lv999/E-Miu_Advanced_EV_Station_Monitoring_System](https://github.com/souravsarkar-Lv999/E-Miu_Advanced_EV_Station_Monitoring_System)
 
 ## License
 
