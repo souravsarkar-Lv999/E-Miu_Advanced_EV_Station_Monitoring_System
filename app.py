@@ -238,6 +238,15 @@ def init_demo_state() -> None:
     st.session_state.setdefault("payment_records", {})
     st.session_state.setdefault("pending_payment_session_id", None)
     st.session_state.setdefault("finish_after_payment_session_id", None)
+    st.session_state.setdefault(
+        "miu_messages",
+        [
+            {
+                "role": "assistant",
+                "content": "Hi, I am Miu. Ask me about stations, queues, charging sessions, maps, or demo payments.",
+            }
+        ],
+    )
 
 
 @st.cache_data(show_spinner=False)
@@ -273,6 +282,63 @@ def render_miu_sidebar_card() -> None:
 
 def render_live_update_hint(label: str = "Live updates every 5 seconds on monitoring panels.") -> None:
     st.caption(label)
+
+
+def generate_miu_reply(user_message: str) -> str:
+    message = user_message.lower().strip()
+    if not message:
+        return "Share a short question and I will help with stations, queues, charging, maps, or demo payments."
+
+    if any(word in message for word in ["hello", "hi", "hey", "miu"]):
+        return "Hello. I can help you find a station, explain queue flow, or guide you through the demo payment step."
+    if any(word in message for word in ["map", "station", "near", "nearest", "charger"]):
+        return "Open Maps to compare nearby stations. Pick a station from the selector to see free booths, active charging spots, and the current queue."
+    if "queue" in message or "waiting" in message:
+        return "Queue drivers join from the Queue page. When a booth becomes free, admin can assign the next driver, and the live panels refresh automatically."
+    if any(word in message for word in ["payment", "pay", "upi", "credit", "debit", "wallet"]):
+        return "The demo payment flow appears before session finish. It supports UPI, cards, net banking, wallet, and an Already Paid demo option."
+    if any(word in message for word in ["finish", "session", "charging"]):
+        return "Charging sessions start from Driver Check-In. To close one now, use Finish + pay so the demo payment completes before the session is marked finished."
+    if any(word in message for word in ["home", "dashboard", "admin"]):
+        return "Home gives a compact station view, Admin Dashboard is for booth setup and controls, and Maps is for nearby-station discovery."
+    if any(word in message for word in ["who are you", "mascot", "about you"]):
+        return "I am Miu, the mascot preview for this EV platform. This is a lightweight assistant demo showing how a future AI helper could guide drivers and operators."
+    return (
+        "Preview mode is active, so I answer a focused set of EV app questions. "
+        "Try asking about maps, queue status, charging sessions, payments, or station controls."
+    )
+
+
+def render_miu_preview() -> None:
+    st.markdown(
+        """
+        <div style="padding:0.75rem 0.95rem;border:1px solid #cbd5e1;border-radius:16px;background:linear-gradient(135deg,#f8fafc 0%,#ecfeff 100%);">
+          <div style="font-size:0.78rem;font-weight:700;color:#0f766e;text-transform:uppercase;letter-spacing:0.04em;">Preview</div>
+          <div style="margin-top:0.2rem;font-size:1rem;font-weight:700;color:#0f172a;">Compact AI assistant concept for Miu</div>
+          <div style="margin-top:0.35rem;font-size:0.94rem;color:#475569;">
+            Lightweight guidance for station discovery, queue help, charging flow, and demo payments.
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_miu_chat() -> None:
+    with st.container(border=True):
+        st.markdown("**Miu chat preview**")
+        st.caption("Lightweight assistant simulation for short EV app questions.")
+        for message in st.session_state["miu_messages"][-6:]:
+            with st.chat_message(message["role"]):
+                st.write(message["content"])
+
+        user_prompt = st.chat_input("Ask Miu about maps, queue, charging, or payment")
+        if user_prompt:
+            st.session_state["miu_messages"].append({"role": "user", "content": user_prompt})
+            st.session_state["miu_messages"].append(
+                {"role": "assistant", "content": generate_miu_reply(user_prompt)}
+            )
+            st.rerun()
 
 
 def build_station_map(
@@ -1128,7 +1194,7 @@ def talk_to_miu_page() -> None:
     st.title("Talk to Miu")
     miu_avatar = load_miu_avatar()
     if miu_avatar is not None:
-        left, right = st.columns([1, 3])
+        left, right = st.columns([1, 2.4])
         with left:
             st.image(miu_avatar, width=132)
         with right:
@@ -1141,6 +1207,21 @@ def talk_to_miu_page() -> None:
         st.info("Miu's avatar is temporarily unavailable, but the assistant page placeholder is ready.")
 
     st.caption("Planned next step: AI help for charger discovery, queue guidance, and payment support.")
+    preview_col, chat_col = st.columns([1, 1.4])
+    with preview_col:
+        render_miu_preview()
+        st.markdown(
+            """
+            **What Miu can preview**
+
+            - Station and map guidance
+            - Queue and wait-flow help
+            - Charging session steps
+            - Demo payment help
+            """
+        )
+    with chat_col:
+        render_miu_chat()
 
 
 def about_page() -> None:
