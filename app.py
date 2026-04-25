@@ -580,24 +580,7 @@ def render_admin_live_panel() -> None:
             hide_index=True,
         )
 
-        st.subheader("Booth Controls")
-        for booth in booths:
-            col1, col2, col3 = st.columns([2, 1, 1])
-            col1.markdown(f"**{booth.name}** {status_badge(booth.status.value)}", unsafe_allow_html=True)
-            if col2.button("Mark free", key=f"free_{booth.id}"):
-                _, message = reset_booth(db, booth.id)
-                st.success(message)
-                st.rerun()
-            if col3.button(
-                "Assign queue",
-                key=f"assign_{booth.id}",
-                disabled=booth.status != BoothStatus.FREE,
-            ):
-                ok, message = assign_next_waiting_driver(db, booth.id)
-                st.success(message) if ok else st.warning(message)
-                st.rerun()
-
-        st.subheader("Station Booth QR Links")
+        st.subheader("Station Booth")
         for station in stations:
             with st.expander(f"{station.name} ({len(station.booths)} booths)", expanded=False):
                 station_booths = sorted(station.booths, key=lambda booth: booth.name)
@@ -606,8 +589,22 @@ def render_admin_live_panel() -> None:
                     booth_url = build_booth_url(booth.code)
                     with qr_cols[index % len(qr_cols)]:
                         st.markdown(f"**{booth.name}**")
+                        st.markdown(status_badge(booth.status.value), unsafe_allow_html=True)
                         st.image(make_qr_image(booth_url), width=110)
                         st.caption(booth.code)
+                        action_col1, action_col2 = st.columns(2)
+                        if action_col1.button("Mark free", key=f"free_{booth.id}"):
+                            _, message = reset_booth(db, booth.id)
+                            st.success(message)
+                            st.rerun()
+                        if action_col2.button(
+                            "Assign queue",
+                            key=f"assign_{booth.id}",
+                            disabled=booth.status != BoothStatus.FREE,
+                        ):
+                            ok, message = assign_next_waiting_driver(db, booth.id)
+                            st.success(message) if ok else st.warning(message)
+                            st.rerun()
 
 
 def admin_dashboard_page() -> None:
@@ -981,22 +978,28 @@ def render_map_live_panel(
             station_options = {station["station_name"]: station for station in station_cards}
 
         option_values = list(station_options.values())
+        selected_index = max(
+            0,
+            next(
+                (
+                    idx
+                    for idx, station in enumerate(option_values)
+                    if station["station_id"] == selected_station_id
+                ),
+                0,
+            ),
+        )
+        st.session_state["map_station_selector"] = list(station_options.keys())[selected_index]
         selected_label = st.selectbox(
             "Nearest stations",
             list(station_options.keys()),
-            index=max(
-                0,
-                next(
-                    (
-                        idx
-                        for idx, station in enumerate(option_values)
-                        if station["station_id"] == selected_station_id
-                    ),
-                    0,
-                ),
-            ),
+            index=selected_index,
+            key="map_station_selector",
         )
         selected_station_snapshot = station_options[selected_label]
+        if int(selected_station_snapshot["station_id"]) != selected_station_id:
+            st.query_params.update(page="map", station_id=str(selected_station_snapshot["station_id"]))
+            st.rerun()
         selected_station = next(
             station for station in stations if station.id == selected_station_snapshot["station_id"]
         )
@@ -1128,7 +1131,7 @@ def talk_to_miu_page() -> None:
     if miu_avatar is not None:
         left, right = st.columns([1, 3])
         with left:
-            st.image(miu_avatar, width=170)
+            st.image(miu_avatar, width=132)
         with right:
             st.markdown("### Miu is the mascot of E-Miu")
             st.write(
@@ -1167,10 +1170,6 @@ def about_page() -> None:
         - SMS or WhatsApp queue notifications
         - Cloud deployment with PostgreSQL
         """
-    )
-    st.write(
-        "The `experiment` and `experiment-1` branches are used to explore product ideas like "
-        "live station monitoring, map-based charger discovery, compact admin workflows, and the Miu mascot experience."
     )
     st.markdown(f"GitHub repository: [{REPO_URL}]({REPO_URL})")
 
