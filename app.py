@@ -535,9 +535,14 @@ def render_home_live_panel(selected_station_id: int | None) -> None:
 def home_page() -> None:
     st.markdown(
         """
-        <div style="padding:0.25rem 0 1rem 0">
-          <h1 style="margin:0;font-size:2.3rem;color:#0f172a;">E-Miu- Advanced EV monitoring System</h1>
-          <p style="margin:0.45rem 0 0 0;font-size:1.05rem;color:#475569;">
+        <div style="padding:0.35rem 0 1rem 0;">
+          <div style="display:inline-block;padding:0.95rem 1.2rem 1rem 1.2rem;border-radius:20px;background:linear-gradient(135deg,#e0f2fe 0%,#f8fafc 55%,#dcfce7 100%);box-shadow:0 18px 40px rgba(15,23,42,0.08);border:1px solid rgba(148,163,184,0.22);">
+            <h1 style="margin:0;line-height:0.92;font-size:2.55rem;font-weight:800;color:#0f172a;letter-spacing:0;">
+              <span style="display:block;color:#0f766e;">E-Miu</span>
+              <span style="display:block;font-size:2.1rem;color:#1e293b;">Advanced EV monitoring System</span>
+            </h1>
+          </div>
+          <p style="margin:0.7rem 0 0 0.1rem;font-size:1.05rem;color:#475569;">
             Live charger visibility, smart queue tracking, and phone-first session monitoring in one sleek control room.
           </p>
         </div>
