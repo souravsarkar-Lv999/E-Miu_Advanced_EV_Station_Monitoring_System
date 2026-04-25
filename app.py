@@ -361,14 +361,9 @@ def build_station_map(
                 <strong>${{station.station_name}}</strong><br />
                 <span>${{station.address}}</span><br /><br />
                 <span>Free: ${{station.free_count}}</span><br />
+                <span>Occupied: ${{station.occupied_count}}</span><br />
                 <span>Charging: ${{station.charging_count}}</span><br />
                 <span>Queue: ${{station.queue_count}}</span><br />
-                <button
-                  onclick="window.__openStation && window.__openStation(${{station.station_id}})"
-                  style="margin-top:10px;border:0;border-radius:8px;background:#0f172a;color:white;padding:8px 10px;cursor:pointer"
-                >
-                  View station details
-                </button>
               </div>
             `);
             marker.on("click", () => updateSelection(station.station_id));
@@ -989,7 +984,6 @@ def render_map_live_panel(
                 0,
             ),
         )
-        st.session_state["map_station_selector"] = list(station_options.keys())[selected_index]
         selected_label = st.selectbox(
             "Nearest stations",
             list(station_options.keys()),
