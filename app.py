@@ -64,24 +64,59 @@ def status_badge(status: str) -> str:
     )
 
 
-def render_geolocation_helper(default_latitude: float, default_longitude: float) -> None:
+def render_geolocation_helper(
+    default_latitude: float,
+    default_longitude: float,
+    auto_apply: bool = False,
+) -> None:
     components.html(
         f"""
         <div style="font-family:Arial,sans-serif;border:1px solid #d1d5db;border-radius:8px;padding:12px;background:#f8fafc">
           <strong>Phone GPS helper</strong>
-          <p style="margin:8px 0">Tap the button, allow location, then copy the latitude and longitude into the form below.</p>
-          <button onclick="getLocation()" style="border:0;border-radius:6px;background:#111827;color:white;padding:8px 12px;cursor:pointer">
+          <p style="margin:8px 0">Tap the button and allow location. If your browser allows it, the booth page will auto-fill your coordinates.</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start;max-width:100%">
+          <button onclick="getLocation()" style="border:0;border-radius:6px;background:#111827;color:white;padding:8px 12px;cursor:pointer;max-width:100%">
             Get my location
           </button>
-          <button onclick="copyDemo()" style="border:1px solid #9ca3af;border-radius:6px;background:white;color:#111827;padding:8px 12px;margin-left:8px;cursor:pointer">
+          <button onclick="copyDemo()" style="border:1px solid #9ca3af;border-radius:6px;background:white;color:#111827;padding:8px 12px;cursor:pointer;max-width:100%">
             Use demo station location
           </button>
-          <pre id="location-output" style="white-space:pre-wrap;margin-top:10px;background:white;border:1px solid #e5e7eb;border-radius:6px;padding:8px">Waiting for location...</pre>
+          </div>
+          <div style="margin-top:12px;display:grid;gap:10px">
+            <div>
+              <label style="display:block;margin-bottom:4px;font-size:14px">Latitude</label>
+              <input id="lat-output" type="text" value="" readonly style="width:100%;max-width:100%;box-sizing:border-box;padding:10px;border:1px solid #d1d5db;border-radius:6px;background:white" />
+            </div>
+            <div>
+              <label style="display:block;margin-bottom:4px;font-size:14px">Longitude</label>
+              <input id="lon-output" type="text" value="" readonly style="width:100%;max-width:100%;box-sizing:border-box;padding:10px;border:1px solid #d1d5db;border-radius:6px;background:white" />
+            </div>
+          </div>
+          <pre id="location-output" style="white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;margin-top:10px;background:white;border:1px solid #e5e7eb;border-radius:6px;padding:8px;max-width:100%;box-sizing:border-box">Waiting for location...</pre>
         </div>
         <script>
           const output = document.getElementById("location-output");
+          const latOutput = document.getElementById("lat-output");
+          const lonOutput = document.getElementById("lon-output");
+          const autoApply = {str(auto_apply).lower()};
+          function setUrlCoordinates(lat, lon) {{
+            const parentWindow = window.parent;
+            const currentUrl = new URL(parentWindow.location.href);
+            currentUrl.searchParams.set("lat", lat);
+            currentUrl.searchParams.set("lon", lon);
+            parentWindow.location.href = currentUrl.toString();
+          }}
           function writeLocation(lat, lon) {{
+            latOutput.value = lat;
+            lonOutput.value = lon;
             output.textContent = `Latitude: ${{lat}}\\nLongitude: ${{lon}}`;
+            if (autoApply) {{
+              try {{
+                setUrlCoordinates(lat, lon);
+              }} catch (error) {{
+                output.textContent += "\\nCould not auto-apply coordinates.";
+              }}
+            }}
           }}
           function getLocation() {{
             if (!navigator.geolocation) {{
@@ -102,9 +137,13 @@ def render_geolocation_helper(default_latitude: float, default_longitude: float)
           function copyDemo() {{
             writeLocation({default_latitude:.6f}, {default_longitude:.6f});
           }}
+          const initialUrl = new URL(window.parent.location.href);
+          if (initialUrl.searchParams.get("lat") && initialUrl.searchParams.get("lon")) {{
+            writeLocation(initialUrl.searchParams.get("lat"), initialUrl.searchParams.get("lon"));
+          }}
         </script>
         """,
-        height=190,
+        height=370,
     )
 
 
@@ -142,7 +181,10 @@ def make_qr_image(url: str):
     qr = qrcode.QRCode(box_size=6, border=2)
     qr.add_data(url)
     qr.make(fit=True)
-    return qr.make_image(fill_color="black", back_color="white")
+    image = qr.make_image(fill_color="black", back_color="white")
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def query_value(name: str, default: str = "") -> str:
@@ -162,37 +204,48 @@ def query_float(name: str, fallback: float) -> float:
         return fallback
 
 
-def render_mobile_location_capture() -> None:
+def query_optional_float(name: str) -> float | None:
+    value = query_value(name)
+    if not value:
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+def render_clipboard_paste_helper() -> None:
     components.html(
         """
-        <script>
-          const search = new URLSearchParams(window.parent.location.search);
-          const hasCoords = search.get("lat") && search.get("lon");
-          const status = document.getElementById("location-status");
-          if (!hasCoords && navigator.geolocation) {
-            status.textContent = "Requesting your phone location...";
-            navigator.geolocation.getCurrentPosition(
-              (position) => {
-                search.set("lat", position.coords.latitude.toFixed(6));
-                search.set("lon", position.coords.longitude.toFixed(6));
-                window.parent.location.search = search.toString();
-              },
-              (error) => {
-                status.textContent = "Location access failed: " + error.message;
-              },
-              { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
-            );
-          } else if (hasCoords) {
-            status.textContent = "Phone location captured.";
-          } else {
-            status.textContent = "Your browser does not support location.";
-          }
-        </script>
-        <div id="location-status" style="font-family:Arial,sans-serif;padding:10px;border:1px solid #d1d5db;border-radius:8px;background:#f8fafc">
-          Preparing phone location...
+        <div style="margin-bottom:8px">
+          <button id="paste-coordinates" style="border:1px solid #9ca3af;border-radius:6px;background:white;color:#111827;padding:8px 12px;cursor:pointer">
+            Paste
+          </button>
+          <span id="paste-status" style="margin-left:10px;font-family:Arial,sans-serif;font-size:14px;color:#4b5563"></span>
         </div>
+        <script>
+          const button = document.getElementById("paste-coordinates");
+          const status = document.getElementById("paste-status");
+          button.addEventListener("click", async () => {
+            try {
+              const text = await navigator.clipboard.readText();
+              const match = text.match(/([-0-9.]+)\\s*,\\s*([-0-9.]+)/);
+              if (!match) {
+                status.textContent = "Clipboard should look like lat,lon";
+                return;
+              }
+              const parentWindow = window.parent;
+              const currentUrl = new URL(parentWindow.location.href);
+              currentUrl.searchParams.set("lat", match[1]);
+              currentUrl.searchParams.set("lon", match[2]);
+              parentWindow.location.href = currentUrl.toString();
+            } catch (error) {
+              status.textContent = "Paste failed.";
+            }
+          });
+        </script>
         """,
-        height=80,
+        height=50,
     )
 
 
@@ -360,7 +413,6 @@ def driver_check_in_page() -> None:
 
         if mobile_mode:
             st.info("QR scan detected. This page is ready for phone check-in.")
-            render_mobile_location_capture()
 
         driver_name = st.text_input("Driver name", value="Demo Driver")
         queue_entry = get_driver_queue_entry(db, driver_name)
@@ -368,70 +420,108 @@ def driver_check_in_page() -> None:
         if queue_entry is not None:
             st.info(f"{driver_name.strip() or 'Driver'}, you are currently still in the queue.")
 
-        render_geolocation_helper(default_booth.latitude, default_booth.longitude)
+        render_geolocation_helper(default_booth.latitude, default_booth.longitude, auto_apply=mobile_mode)
 
         booth_options = {f"{booth.name} ({booth.code})": booth for booth in booths}
         default_index = list(booth_options.values()).index(default_booth)
-        with st.form("driver_check_in"):
-            booth_label = st.selectbox("Charging booth", list(booth_options.keys()), index=default_index)
-            selected_booth = booth_options[booth_label]
-            st.caption(
-                "For a real phone test, paste the GPS values from the helper. "
-                "For local demo testing, keep the booth's coordinates."
+        booth_label = st.selectbox(
+            "Charging booth",
+            list(booth_options.keys()),
+            index=default_index,
+            disabled=mobile_mode and booth_code_from_query != "",
+        )
+        selected_booth = booth_options[booth_label]
+        st.caption(
+            "For phone use, the QR page tries to fill your coordinates automatically. "
+            "If the browser blocks GPS, use the manual fallback."
+        )
+
+        mobile_latitude = query_optional_float("lat")
+        mobile_longitude = query_optional_float("lon")
+        show_manual_location = (not mobile_mode) or mobile_latitude is None or mobile_longitude is None
+
+        if mobile_mode and mobile_latitude is not None and mobile_longitude is not None:
+            driver_latitude = mobile_latitude
+            driver_longitude = mobile_longitude
+            st.success(
+                f"Phone location detected and applied: {driver_latitude:.6f}, {driver_longitude:.6f}"
             )
-            driver_latitude = st.number_input(
-                "Your latitude",
-                value=query_float("lat", float(selected_booth.latitude)),
-                format="%.6f",
-            )
-            driver_longitude = st.number_input(
-                "Your longitude",
-                value=query_float("lon", float(selected_booth.longitude)),
-                format="%.6f",
-            )
+        else:
+            driver_latitude = float(selected_booth.latitude)
+            driver_longitude = float(selected_booth.longitude)
+
+        if show_manual_location:
+            with st.expander("Manual location fallback", expanded=mobile_mode):
+                driver_latitude = st.number_input(
+                    "Your latitude",
+                    value=query_float("lat", float(selected_booth.latitude)),
+                    format="%.6f",
+                )
+                driver_longitude = st.number_input(
+                    "Your longitude",
+                    value=query_float("lon", float(selected_booth.longitude)),
+                    format="%.6f",
+                )
+
+        if mobile_mode:
+            car_model = st.radio("Car model", list(VEHICLE_MODELS.keys()), index=0)
+        else:
             car_model = st.selectbox("Car model", list(VEHICLE_MODELS.keys()))
-            vehicle = VEHICLE_MODELS[car_model]
-            start_battery = st.slider("Current battery %", 1, 95, 25)
-            target_battery = st.slider("Target battery %", start_battery + 1, 100, 80)
-            station_power = st.slider("Station charging power (kW)", 3.0, 150.0, 30.0)
-            effective_power = min(station_power, vehicle["max_power_kw"])
-            estimated_minutes = estimate_minutes(
+        vehicle = VEHICLE_MODELS[car_model]
+        start_battery = st.slider("Current battery %", 1, 95, 25)
+        target_battery = st.slider("Target battery %", start_battery + 1, 100, 80)
+
+        station_power_default = 30.0
+        if mobile_mode:
+            station_power = station_power_default
+            st.slider(
+                "Station charging power (kW)",
+                3.0,
+                150.0,
+                station_power_default,
+                disabled=True,
+            )
+        else:
+            station_power = st.slider("Station charging power (kW)", 3.0, 150.0, station_power_default)
+        effective_power = min(station_power, vehicle["max_power_kw"])
+        estimated_minutes = estimate_minutes(
+            start_battery,
+            target_battery,
+            effective_power,
+            assumed_battery_kwh=vehicle["battery_kwh"],
+        )
+
+        info1, info2, info3 = st.columns(3)
+        info1.metric("Battery Size", f"{vehicle['battery_kwh']} kWh")
+        info2.metric("Car Max Intake", f"{vehicle['max_power_kw']} kW")
+        info3.metric("Estimated Time", f"{estimated_minutes} min")
+        st.caption(
+            f"Effective charging power used for estimation: {effective_power:.1f} kW. "
+            f"This updates live when you change car model or battery percentages."
+        )
+
+        submit_disabled = mobile_mode and mobile_latitude is None and not show_manual_location
+        submitted = st.button("Check in and start charging", type="primary", disabled=submit_disabled)
+        if submitted:
+            ok, message, session = attempt_check_in(
+                db,
+                selected_booth.code,
+                driver_name,
+                driver_latitude,
+                driver_longitude,
                 start_battery,
                 target_battery,
                 effective_power,
-                assumed_battery_kwh=vehicle["battery_kwh"],
             )
-
-            info1, info2, info3 = st.columns(3)
-            info1.metric("Battery Size", f"{vehicle['battery_kwh']} kWh")
-            info2.metric("Car Max Intake", f"{vehicle['max_power_kw']} kW")
-            info3.metric("Estimated Time", f"{estimated_minutes} min")
-            st.caption(
-                f"Effective charging power used for estimation: {effective_power:.1f} kW. "
-                f"This is based on the selected car model and station power."
-            )
-
-            submitted = st.form_submit_button("Check in and start charging")
-            if submitted:
-                ok, message, session = attempt_check_in(
-                    db,
-                    selected_booth.code,
-                    driver_name,
-                    driver_latitude,
-                    driver_longitude,
-                    start_battery,
-                    target_battery,
-                    effective_power,
+            if ok:
+                st.success(message)
+                st.info(
+                    f"Session #{session.id} started. Estimated finish: "
+                    f"{format_datetime(session.estimated_finish_at)} UTC."
                 )
-                if ok:
-                    st.success(message)
-                    st.info(
-                        f"Session #{session.id} started. Estimated finish: "
-                        f"{format_datetime(session.estimated_finish_at)} UTC."
-                    )
-                    st.rerun()
-                else:
-                    st.error(message)
+                st.rerun()
+            else:
+                st.error(message)
 
         st.subheader("Active Sessions")
         sessions = db.scalars(
@@ -590,15 +680,17 @@ def about_page() -> None:
 
 def main() -> None:
     bootstrap()
+    mobile_mode = query_value("mobile") == "1"
     st.sidebar.title("Navigation")
     page_options = [
         "Home",
-        "Admin Dashboard",
         "Driver Check-In",
         "Queue",
         "Reports",
         "About Project",
     ]
+    if not mobile_mode:
+        page_options.insert(1, "Admin Dashboard")
     default_page = query_value("page")
     default_index = 0
     if default_page == "driver" or query_value("booth"):

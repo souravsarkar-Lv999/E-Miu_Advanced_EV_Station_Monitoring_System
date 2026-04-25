@@ -40,6 +40,16 @@ This project changes the domain:
 
 ## How To Run In VS Code
 
+### Fastest repeat command
+
+From the project folder, you can run everything with this single command:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\run_experiment.ps1
+```
+
+This creates `.venv` if needed, installs requirements, and starts Streamlit for laptop + phone testing.
+
 1. Open VS Code.
 2. Open this project folder:
 
