@@ -91,6 +91,7 @@ def attempt_check_in(
     start_battery_percent: int,
     target_battery_percent: int,
     current_power_kw: float,
+    battery_kwh: float = 60.0,
 ) -> tuple[bool, str, ChargingSession | None]:
     booth = db.scalar(select(Booth).where(Booth.code == booth_code.strip().upper()))
     if booth is None:
@@ -117,6 +118,7 @@ def attempt_check_in(
         start_battery_percent,
         target_battery_percent,
         current_power_kw,
+        assumed_battery_kwh=battery_kwh,
     )
     session = ChargingSession(
         booth_id=booth.id,
@@ -210,10 +212,11 @@ def assign_next_waiting_driver(db: Session, booth_id: int) -> tuple[bool, str]:
     if entry is None:
         return False, "No waiting drivers for this station."
 
-    entry.status = QueueStatus.CANCELLED
+    entry.status = QueueStatus.ASSIGNED
+    entry.assigned_booth_id = booth.id
     db.commit()
     db.refresh(entry)
-    return True, f"{entry.driver.name} was removed from the queue for {booth.name}."
+    return True, f"{entry.driver.name} was assigned to {booth.name} from the queue."
 
 
 def pop_next_waiting_driver(db: Session, station_id: int) -> QueueEntry | None:
@@ -284,7 +287,7 @@ def station_live_status(
     *,
     user_latitude: float | None = None,
     user_longitude: float | None = None,
-) -> dict[str, float | int | str]:
+) -> dict[str, float | int | str | None]:
     booths = list(station.booths)
     free_count = sum(1 for booth in booths if booth.status == BoothStatus.FREE)
     charging_count = sum(1 for booth in booths if booth.status == BoothStatus.CHARGING)
