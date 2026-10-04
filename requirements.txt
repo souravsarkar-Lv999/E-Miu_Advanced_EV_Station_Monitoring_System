@@ -2,3 +2,4 @@ streamlit>=1.36
 SQLAlchemy>=2.0
 pytest>=8.0
 qrcode>=8.0
+Pillow>=10.0
