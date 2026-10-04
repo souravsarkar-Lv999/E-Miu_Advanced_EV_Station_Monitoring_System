@@ -73,15 +73,24 @@ For deployed apps, add the same values through your hosting provider's secret or
 ```text
 E-Miu_Advanced_EV_Station_Monitoring_System/
   app.py
+  miu.png
   requirements.txt
+  run_experiment.ps1
   README.md
   LICENSE
+  .streamlit/
+    config.toml
+    secrets.example.toml
   ev_monitoring/
+    __init__.py
+    config.py
     database.py
     geofence.py
+    miu_knowledge.py
     models.py
     seed.py
     services.py
+    vehicles.py
   tests/
     test_geofence.py
     test_services.py
@@ -95,7 +104,7 @@ pytest
 
 ## Repository
 
-https://github.com/souravsarkar-Lv999/E-Miu_Advanced_EV_Station_Monitoring_System-Experimental-
+https://github.com/souravsarkar-Lv999/E-Miu_Advanced_EV_Station_Monitoring_System
 
 ## License
 
