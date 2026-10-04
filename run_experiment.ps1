@@ -1,16 +1,10 @@
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$venvPython = if (Test-Path (Join-Path $root ".venv\Scripts\python.exe")) {
+$venvPython = if ($IsWindows -ne $false) {
     Join-Path $root ".venv\Scripts\python.exe"
-} elseif (Test-Path (Join-Path $root ".venv/bin/python")) {
-    Join-Path $root ".venv/bin/python"
 } else {
-    if ($IsWindows -ne $false) {
-        Join-Path $root ".venv\Scripts\python.exe"
-    } else {
-        Join-Path $root ".venv/bin/python"
-    }
+    Join-Path $root ".venv/bin/python"
 }
 $preferredPort = 8501
 
@@ -50,27 +44,56 @@ function Find-RealPython {
     return $null
 }
 
-if (-not (Test-Path $venvPython)) {
-    $venvDir = Join-Path $root ".venv"
-    $realPython = Find-RealPython
-
-    if ($realPython) {
-        & $realPython -m venv $venvDir
-    } else {
-        Write-Host "No working Python runtime found on system." -ForegroundColor Yellow
-        Write-Host "Setting up portable Python 3.12 strictly inside the project folder..." -ForegroundColor Cyan
-        $toolsDir = Join-Path $root ".tools"
-        $uvExe = Join-Path $toolsDir "uv.exe"
-        if (-not (Test-Path $uvExe)) {
-            New-Item -ItemType Directory -Force -Path $toolsDir | Out-Null
-            $zipPath = Join-Path $toolsDir "uv.zip"
-            curl.exe -sL "https://github.com/astral-sh/uv/releases/download/0.4.18/uv-x86_64-pc-windows-msvc.zip" -o $zipPath
-            tar.exe -xf $zipPath -C $toolsDir
-            if (Test-Path $zipPath) { Remove-Item $zipPath }
+function Test-VenvFunctional {
+    param([string]$PythonPath)
+    if (-not (Test-Path $PythonPath)) { return $false }
+    try {
+        $test = & $PythonPath -c "import sys; print('ok')" 2>$null
+        if ($LASTEXITCODE -eq 0 -and $test -match "ok") {
+            return $true
         }
-        $env:UV_PYTHON_INSTALL_DIR = Join-Path $root ".python"
-        & $uvExe venv $venvDir --python 3.12
+    } catch {
+        return $false
+    }
+    return $false
+}
+
+$venvDir = Join-Path $root ".venv"
+
+if (-not (Test-VenvFunctional $venvPython)) {
+    if (Test-Path $venvDir) {
+        Write-Host "Detected moved or invalid virtual environment. Rebuilding .venv in project folder..." -ForegroundColor Yellow
+        Remove-Item -Recurse -Force $venvDir -ErrorAction SilentlyContinue
+    }
+
+    $toolsDir = Join-Path $root ".tools"
+    $uvExe = Join-Path $toolsDir "uv.exe"
+    $localPythonDir = Join-Path $root ".python"
+    $portablePython = Get-ChildItem -Path $localPythonDir -Filter "python.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+
+    if ($portablePython -and (Test-Path $portablePython) -and (Test-Path $uvExe)) {
+        Write-Host "Linking virtual environment with existing portable Python..." -ForegroundColor Cyan
+        & $uvExe venv $venvDir --python $portablePython
         & $uvExe pip install pip --python (Join-Path $venvDir "Scripts\python.exe")
+    } else {
+        $realPython = Find-RealPython
+        if ($realPython) {
+            Write-Host "Creating virtual environment with system Python ($realPython)..." -ForegroundColor Cyan
+            & $realPython -m venv $venvDir
+        } else {
+            Write-Host "No working Python runtime found on system." -ForegroundColor Yellow
+            Write-Host "Setting up portable Python 3.12 strictly inside the project folder..." -ForegroundColor Cyan
+            if (-not (Test-Path $uvExe)) {
+                New-Item -ItemType Directory -Force -Path $toolsDir | Out-Null
+                $zipPath = Join-Path $toolsDir "uv.zip"
+                curl.exe -sL "https://github.com/astral-sh/uv/releases/download/0.4.18/uv-x86_64-pc-windows-msvc.zip" -o $zipPath
+                tar.exe -xf $zipPath -C $toolsDir
+                if (Test-Path $zipPath) { Remove-Item $zipPath }
+            }
+            $env:UV_PYTHON_INSTALL_DIR = $localPythonDir
+            & $uvExe venv $venvDir --python 3.12
+            & $uvExe pip install pip --python (Join-Path $venvDir "Scripts\python.exe")
+        }
     }
 }
 

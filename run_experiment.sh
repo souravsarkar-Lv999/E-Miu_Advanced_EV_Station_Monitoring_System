@@ -7,8 +7,9 @@ cd "$DIR"
 VENV_DIR="$DIR/.venv"
 VENV_PYTHON="$VENV_DIR/bin/python"
 
-if [ ! -f "$VENV_PYTHON" ]; then
-    echo "Creating virtual environment in .venv..."
+if [ ! -f "$VENV_PYTHON" ] || ! "$VENV_PYTHON" -c "import sys; print('ok')" >/dev/null 2>&1; then
+    echo "Setting up virtual environment in .venv..."
+    rm -rf "$VENV_DIR"
     if command -v python3 >/dev/null 2>&1; then
         python3 -m venv "$VENV_DIR"
     elif command -v python >/dev/null 2>&1; then
