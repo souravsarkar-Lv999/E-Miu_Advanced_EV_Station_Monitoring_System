@@ -4,6 +4,7 @@ from sqlalchemy.orm import sessionmaker
 from ev_monitoring.models import Base, BoothStatus, QueueStatus
 from ev_monitoring.seed import seed_demo_data
 from ev_monitoring.services import (
+    assign_next_waiting_driver,
     attempt_check_in,
     estimate_minutes,
     estimate_payment_amount,
@@ -138,3 +139,13 @@ def test_estimate_payment_amount_uses_units_and_power():
     assert quote["energy_cost"] == 522.0
     assert quote["power_fee"] == 10.5
     assert quote["total_amount"] == 532.5
+
+
+def test_assign_next_waiting_driver_sets_assigned_status():
+    db = make_session()
+    seed_demo_data(db)
+    join_queue(db, 1, "Queue Driver")
+    ok, message = assign_next_waiting_driver(db, 1)
+
+    assert ok is True
+    assert "assigned" in message
