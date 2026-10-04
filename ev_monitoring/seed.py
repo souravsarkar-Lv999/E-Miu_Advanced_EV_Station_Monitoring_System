@@ -3,7 +3,14 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ev_monitoring.models import Booth, Station, User, UserRole
+from ev_monitoring.models import (
+    Booth,
+    ChargingSession,
+    QueueEntry,
+    Station,
+    User,
+    UserRole,
+)
 from ev_monitoring.services import create_booth, create_station
 
 
@@ -78,6 +85,6 @@ def seed_demo_data(db: Session) -> None:
 
 
 def reset_demo_data(db: Session) -> None:
-    for model in reversed([Station, Booth, User]):
+    for model in [ChargingSession, QueueEntry, Booth, Station, User]:
         db.query(model).delete()
     db.commit()
