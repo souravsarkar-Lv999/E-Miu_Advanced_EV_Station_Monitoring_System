@@ -35,6 +35,16 @@ E-Miu is a Streamlit-based EV charging operations demo that turns geofencing ide
 
 ## Run Locally
 
+### Quick Start (Windows)
+Double-click `run_experiment.bat` or run:
+
+```cmd
+run_experiment.bat
+```
+*(Automatically sets up isolated portable Python strictly in the project folder and launches the app, requiring zero host setup and bypassing PowerShell execution policy restrictions.)*
+
+### Manual Run (Cross-Platform)
+
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -76,6 +86,7 @@ E-Miu_Advanced_EV_Station_Monitoring_System/
   miu.png
   requirements.txt
   run_experiment.ps1
+  run_experiment.bat
   README.md
   LICENSE
   .streamlit/

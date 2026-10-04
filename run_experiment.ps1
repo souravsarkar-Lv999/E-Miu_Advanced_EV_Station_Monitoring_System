@@ -20,9 +20,13 @@ function Get-FreePort {
     )
 
     for ($port = $StartPort; $port -lt ($StartPort + 20); $port++) {
-        $inUse = netstat -ano | Select-String ":$port\s"
-        if (-not $inUse) {
+        try {
+            $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $port)
+            $listener.Start()
+            $listener.Stop()
             return $port
+        } catch {
+            continue
         }
     }
 
@@ -54,13 +58,29 @@ if (-not (Test-Path $venvPython)) {
     }
 }
 
-& $venvPython -m pip install -r (Join-Path $root "requirements.txt")
+$toolsUv = Join-Path $root ".tools\uv.exe"
+if (Test-Path $toolsUv) {
+    & $toolsUv pip install -r (Join-Path $root "requirements.txt") --python $venvPython
+} else {
+    & $venvPython -m pip install -r (Join-Path $root "requirements.txt")
+}
+
 $port = Get-FreePort -StartPort $preferredPort
+
+$localIp = try {
+    (Get-NetIPAddress -AddressFamily IPv4 -InterfaceAlias "Wi-Fi*", "Ethernet*" -ErrorAction SilentlyContinue |
+     Where-Object { $_.IPAddress -notmatch '^127\.' -and $_.IPAddress -notmatch '^169\.254\.' } |
+     Select-Object -First 1).IPAddress
+} catch { $null }
+
+if (-not $localIp) {
+    $localIp = hostname
+}
 
 Write-Host ""
 Write-Host "Starting E-Miu Advanced EV Station Monitoring System on port $port" -ForegroundColor Cyan
 Write-Host "Laptop URL: http://localhost:$port" -ForegroundColor Green
-Write-Host "Phone URL:  http://$(hostname):$port" -ForegroundColor Green
+Write-Host "Phone URL:  http://${localIp}:$port" -ForegroundColor Green
 Write-Host ""
 
 & $venvPython -m streamlit run (Join-Path $root "app.py") --server.address 0.0.0.0 --server.port $port
