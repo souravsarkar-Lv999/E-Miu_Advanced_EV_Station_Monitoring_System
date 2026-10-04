@@ -43,6 +43,12 @@ run_experiment.bat
 ```
 *(Automatically sets up isolated portable Python strictly in the project folder and launches the app, requiring zero host setup and bypassing PowerShell execution policy restrictions.)*
 
+### Quick Start (Linux / macOS)
+```bash
+chmod +x run_experiment.sh
+./run_experiment.sh
+```
+
 ### Manual Run (Cross-Platform)
 
 ```powershell
@@ -87,6 +93,7 @@ E-Miu_Advanced_EV_Station_Monitoring_System/
   requirements.txt
   run_experiment.ps1
   run_experiment.bat
+  run_experiment.sh
   README.md
   LICENSE
   .streamlit/

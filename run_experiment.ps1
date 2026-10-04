@@ -33,16 +33,32 @@ function Get-FreePort {
     throw "Could not find a free port starting from $StartPort."
 }
 
+function Find-RealPython {
+    foreach ($cmd in @("python", "py", "python3")) {
+        try {
+            $entry = Get-Command $cmd -ErrorAction SilentlyContinue
+            if ($entry) {
+                $ver = & $entry.Source -c "import sys; print(sys.version_info[0])" 2>$null
+                if ($LASTEXITCODE -eq 0 -and $ver -ge 3) {
+                    return $entry.Source
+                }
+            }
+        } catch {
+            continue
+        }
+    }
+    return $null
+}
+
 if (-not (Test-Path $venvPython)) {
     $venvDir = Join-Path $root ".venv"
-    if (Get-Command python -ErrorAction SilentlyContinue) {
-        python -m venv $venvDir
-    } elseif (Get-Command py -ErrorAction SilentlyContinue) {
-        py -3 -m venv $venvDir
-    } elseif (Get-Command python3 -ErrorAction SilentlyContinue) {
-        python3 -m venv $venvDir
+    $realPython = Find-RealPython
+
+    if ($realPython) {
+        & $realPython -m venv $venvDir
     } else {
-        Write-Host "No system Python detected. Setting up portable environment in project folder..." -ForegroundColor Yellow
+        Write-Host "No working Python runtime found on system." -ForegroundColor Yellow
+        Write-Host "Setting up portable Python 3.12 strictly inside the project folder..." -ForegroundColor Cyan
         $toolsDir = Join-Path $root ".tools"
         $uvExe = Join-Path $toolsDir "uv.exe"
         if (-not (Test-Path $uvExe)) {
