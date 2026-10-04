@@ -48,13 +48,14 @@ from ev_monitoring.vehicles import VEHICLE_MODELS
 
 st.set_page_config(
     page_title="E-Miu Advanced EV Station Monitoring System",
-    page_icon="EV",
+    page_icon="⚡",
     layout="wide",
 )
 
 
-MIU_IMAGE_PATH = Path("C:/Users/Sourav/Downloads/miu.png")
-REPO_URL = "https://github.com/souravsarkar-Lv999/E-Miu_Advanced_EV_Station_Monitoring_System-Experimental-"
+PROJECT_ROOT = Path(__file__).resolve().parent
+MIU_IMAGE_PATH = PROJECT_ROOT / "miu.png"
+REPO_URL = "https://github.com/souravsarkar-Lv999/E-Miu_Advanced_EV_Station_Monitoring_System"
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_KEY_PLACEHOLDERS = {
     "",
@@ -167,9 +168,13 @@ def render_geolocation_helper(
           function copyDemo() {{
             writeLocation({default_latitude:.6f}, {default_longitude:.6f});
           }}
-          const initialUrl = new URL(window.parent.location.href);
-          if (initialUrl.searchParams.get("lat") && initialUrl.searchParams.get("lon")) {{
-            writeLocation(initialUrl.searchParams.get("lat"), initialUrl.searchParams.get("lon"));
+          try {{
+            const initialUrl = new URL(window.parent.location.href);
+            if (initialUrl.searchParams.get("lat") && initialUrl.searchParams.get("lon")) {{
+              writeLocation(initialUrl.searchParams.get("lat"), initialUrl.searchParams.get("lon"));
+            }}
+          }} catch (e) {{
+            // Parent window URL inaccessible in sandboxed/cross-origin iframe
           }}
         </script>
         """,
@@ -580,15 +585,19 @@ def build_station_map(
           }});
 
           function updateSelection(stationId) {{
-            const parentWindow = window.parent;
-            const url = new URL(parentWindow.location.href);
-            url.searchParams.set("page", "map");
-            url.searchParams.set("station_id", stationId);
-            if (userLatitude !== null && userLongitude !== null) {{
-              url.searchParams.set("lat", userLatitude);
-              url.searchParams.set("lon", userLongitude);
+            try {{
+              const parentWindow = window.parent;
+              const url = new URL(parentWindow.location.href);
+              url.searchParams.set("page", "map");
+              url.searchParams.set("station_id", stationId);
+              if (userLatitude !== null && userLongitude !== null) {{
+                url.searchParams.set("lat", userLatitude);
+                url.searchParams.set("lon", userLongitude);
+              }}
+              parentWindow.location.href = url.toString();
+            }} catch (error) {{
+              console.warn("Could not update parent URL: ", error);
             }}
-            parentWindow.location.href = url.toString();
           }}
 
           stations.forEach((station) => {{
@@ -837,9 +846,10 @@ def render_admin_live_panel() -> None:
 
 def admin_dashboard_page() -> None:
     st.title("Admin Dashboard")
+    current_port = get_current_server_port()
     st.info(
         f"For phone testing on the same hotspot/network, open or scan links that use this laptop IP: "
-        f"`{get_local_ip()}:8501`"
+        f"`{get_local_ip()}:{current_port}`"
     )
 
     with get_session() as db:
@@ -1037,7 +1047,9 @@ def driver_check_in_page() -> None:
             car_model = st.selectbox("Car model", list(VEHICLE_MODELS.keys()))
         vehicle = VEHICLE_MODELS[car_model]
         start_battery = st.slider("Current battery %", 1, 95, 25)
-        target_battery = st.slider("Target battery %", start_battery + 1, 100, 80)
+        target_min = start_battery + 1
+        target_default = max(80, target_min)
+        target_battery = st.slider("Target battery %", target_min, 100, target_default)
 
         station_power_default = 30.0
         if mobile_mode:
@@ -1070,8 +1082,7 @@ def driver_check_in_page() -> None:
 
         pending_payment_session_id = st.session_state.get("pending_payment_session_id")
 
-        submit_disabled = mobile_mode and mobile_latitude is None and not show_manual_location
-        submitted = st.button("Check in and start charging", type="primary", disabled=submit_disabled)
+        submitted = st.button("Check in and start charging", type="primary")
         if submitted:
             ok, message, session = attempt_check_in(
                 db,
@@ -1082,6 +1093,7 @@ def driver_check_in_page() -> None:
                 start_battery,
                 target_battery,
                 effective_power,
+                battery_kwh=vehicle["battery_kwh"],
             )
             if ok:
                 st.success(message)
