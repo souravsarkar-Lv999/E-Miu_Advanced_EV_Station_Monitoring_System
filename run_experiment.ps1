@@ -38,7 +38,19 @@ if (-not (Test-Path $venvPython)) {
     } elseif (Get-Command python3 -ErrorAction SilentlyContinue) {
         python3 -m venv $venvDir
     } else {
-        throw "Python executable was not found in PATH (tried python, py, python3)."
+        Write-Host "No system Python detected. Setting up portable environment in project folder..." -ForegroundColor Yellow
+        $toolsDir = Join-Path $root ".tools"
+        $uvExe = Join-Path $toolsDir "uv.exe"
+        if (-not (Test-Path $uvExe)) {
+            New-Item -ItemType Directory -Force -Path $toolsDir | Out-Null
+            $zipPath = Join-Path $toolsDir "uv.zip"
+            curl.exe -sL "https://github.com/astral-sh/uv/releases/download/0.4.18/uv-x86_64-pc-windows-msvc.zip" -o $zipPath
+            tar.exe -xf $zipPath -C $toolsDir
+            if (Test-Path $zipPath) { Remove-Item $zipPath }
+        }
+        $env:UV_PYTHON_INSTALL_DIR = Join-Path $root ".python"
+        & $uvExe venv $venvDir --python 3.12
+        & $uvExe pip install pip --python (Join-Path $venvDir "Scripts\python.exe")
     }
 }
 
