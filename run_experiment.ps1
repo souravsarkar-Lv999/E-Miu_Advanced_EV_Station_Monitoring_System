@@ -1,7 +1,17 @@
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$venvPython = Join-Path $root ".venv\Scripts\python.exe"
+$venvPython = if (Test-Path (Join-Path $root ".venv\Scripts\python.exe")) {
+    Join-Path $root ".venv\Scripts\python.exe"
+} elseif (Test-Path (Join-Path $root ".venv/bin/python")) {
+    Join-Path $root ".venv/bin/python"
+} else {
+    if ($IsWindows -ne $false) {
+        Join-Path $root ".venv\Scripts\python.exe"
+    } else {
+        Join-Path $root ".venv/bin/python"
+    }
+}
 $preferredPort = 8501
 
 function Get-FreePort {
@@ -20,7 +30,16 @@ function Get-FreePort {
 }
 
 if (-not (Test-Path $venvPython)) {
-    python -m venv (Join-Path $root ".venv")
+    $venvDir = Join-Path $root ".venv"
+    if (Get-Command python -ErrorAction SilentlyContinue) {
+        python -m venv $venvDir
+    } elseif (Get-Command py -ErrorAction SilentlyContinue) {
+        py -3 -m venv $venvDir
+    } elseif (Get-Command python3 -ErrorAction SilentlyContinue) {
+        python3 -m venv $venvDir
+    } else {
+        throw "Python executable was not found in PATH (tried python, py, python3)."
+    }
 }
 
 & $venvPython -m pip install -r (Join-Path $root "requirements.txt")
